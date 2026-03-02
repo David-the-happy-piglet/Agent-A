@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Agent-A</string>
+    <string name="hint_input">Type a command…</string>
+    <string name="btn_send">Send</string>
+    <string name="status_ready">Agent ready</string>
+    <string name="status_planning">Planning…</string>
+    <string name="action_preview_title">Action Preview</string>
+    <string name="btn_confirm">Confirm</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="cancelled">Cancelled.</string>
+    <string name="welcome_message">Hi! I\'m Agent-A. I can make calls, send texts, navigate, and check your emails. What would you like to do?</string>
+</resources>

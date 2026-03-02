@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <color name="chat_background">#FFF5F5F5</color>
+    <color name="input_bg">#FFFFFFFF</color>
+    <color name="status_bg">#FFE8EAF6</color>
+    <color name="status_text">#FF3949AB</color>
+
+    <color name="user_bubble">#FF1976D2</color>
+    <color name="user_bubble_text">#FFFFFFFF</color>
+    <color name="user_timestamp">#B3FFFFFF</color>
+
+    <color name="assistant_bubble">#FFE0E0E0</color>
+    <color name="assistant_bubble_text">#FF212121</color>
+    <color name="assistant_timestamp">#FF9E9E9E</color>
+</resources>
