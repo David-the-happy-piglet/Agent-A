@@ -1,5 +1,4 @@
-agent_a/
-├── MainActivity.java              
+agent_a/           
 ├── core/
 │   ├── agent/
 │   │   ├── Executor.java          — runs tools sequentially, resolves data between steps
