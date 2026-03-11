@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class PhoneDialTool implements Tool {
@@ -13,6 +14,15 @@ public class PhoneDialTool implements Tool {
 
     @Override
     public RiskLevel defaultRiskLevel() { return RiskLevel.LOW; }
+
+    @Override
+    public ToolSpec spec() {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        params.put("phone", "String — the phone number to dial");
+        return new ToolSpec("phone.dial",
+                "Opens the phone dialer with the given number. No permission required.",
+                params, RiskLevel.LOW);
+    }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {

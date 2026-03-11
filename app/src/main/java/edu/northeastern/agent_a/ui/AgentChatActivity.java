@@ -118,7 +118,7 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
 
-        planner = new Planner(new MockLLMClient());
+        planner = new Planner(new MockLLMClient(), registry);
         executor = new Executor(registry);
         policy = new Policy();
     }

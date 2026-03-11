@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class SmsComposeTool implements Tool {
@@ -13,6 +14,16 @@ public class SmsComposeTool implements Tool {
 
     @Override
     public RiskLevel defaultRiskLevel() { return RiskLevel.MEDIUM; }
+
+    @Override
+    public ToolSpec spec() {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        params.put("phone", "String — recipient phone number");
+        params.put("body", "String — message text");
+        return new ToolSpec("sms.compose",
+                "Opens SMS compose screen with the given recipient and message body. No permission required.",
+                params, RiskLevel.MEDIUM);
+    }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {

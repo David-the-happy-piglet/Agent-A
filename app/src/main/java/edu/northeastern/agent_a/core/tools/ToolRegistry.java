@@ -1,6 +1,8 @@
 package edu.northeastern.agent_a.core.tools;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class ToolRegistry {
@@ -17,5 +19,14 @@ public class ToolRegistry {
 
     public boolean has(String name) {
         return tools.containsKey(name);
+    }
+
+    /** Returns specs for all registered tools, used by PromptBuilder. */
+    public List<ToolSpec> getAllSpecs() {
+        List<ToolSpec> specs = new ArrayList<>();
+        for (Tool tool : tools.values()) {
+            specs.add(tool.spec());
+        }
+        return specs;
     }
 }

@@ -2,6 +2,7 @@ package edu.northeastern.agent_a.core.tools;
 
 import android.content.Context;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class EmailSummaryTool implements Tool {
@@ -17,6 +18,15 @@ public class EmailSummaryTool implements Tool {
 
     @Override
     public RiskLevel defaultRiskLevel() { return RiskLevel.LOW; }
+
+    @Override
+    public ToolSpec spec() {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        params.put("mode", "String — 'inbox' for inbox summary");
+        return new ToolSpec("email.summary",
+                "Returns a summary of recent emails in the inbox (mock data for prototype).",
+                params, RiskLevel.LOW);
+    }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {

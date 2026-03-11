@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class MapsNavigateTool implements Tool {
@@ -13,6 +14,15 @@ public class MapsNavigateTool implements Tool {
 
     @Override
     public RiskLevel defaultRiskLevel() { return RiskLevel.LOW; }
+
+    @Override
+    public ToolSpec spec() {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        params.put("destination", "String — address or place name");
+        return new ToolSpec("maps.navigate",
+                "Opens Google Maps navigation to the destination. No permission required.",
+                params, RiskLevel.LOW);
+    }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {

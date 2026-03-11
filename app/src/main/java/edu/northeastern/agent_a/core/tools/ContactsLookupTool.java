@@ -9,6 +9,7 @@ import android.provider.ContactsContract;
 import androidx.core.content.ContextCompat;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ContactsLookupTool implements Tool {
@@ -18,6 +19,16 @@ public class ContactsLookupTool implements Tool {
 
     @Override
     public RiskLevel defaultRiskLevel() { return RiskLevel.MEDIUM; }
+
+    @Override
+    public ToolSpec spec() {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        params.put("name", "String — contact name to search for");
+        return new ToolSpec("contacts.lookup",
+                "Searches contacts by name and returns their phone number. Requires READ_CONTACTS permission; "
+                        + "if denied, ask user to provide the phone number directly.",
+                params, RiskLevel.MEDIUM);
+    }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {
