@@ -210,8 +210,8 @@ public class AgentChatActivity extends AppCompatActivity {
     }
 
     private void executePlan(Plan plan, String originalUserText) {
-        setStatus(getString(R.string.status_executing));
-        btnSend.setEnabled(false);  // prevent double-submit while tools are running
+        setStatus("Executing actions...");
+        setInputEnabled(false);
 
         bgExecutor.execute(() -> {
             List<ToolResult> results;
@@ -223,7 +223,7 @@ public class AgentChatActivity extends AppCompatActivity {
                     addAssistant("Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
                     pendingPlan = null;
-                    btnSend.setEnabled(true);
+                    setInputEnabled(true);
                 });
                 return;
             }
@@ -243,7 +243,7 @@ public class AgentChatActivity extends AppCompatActivity {
                             contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
                             setStatus(getString(R.string.status_ready));
                             pendingPlan = null;
-                            btnSend.setEnabled(true);
+                            setInputEnabled(true);
                             return;
                         case FAIL:
                         default:
@@ -251,9 +251,11 @@ public class AgentChatActivity extends AppCompatActivity {
                             break;
                     }
                 }
-
-        setStatus(getString(R.string.status_ready));
-        pendingPlan = null;
+                setStatus(getString(R.string.status_ready));
+                pendingPlan = null;
+                setInputEnabled(true);
+            });
+        });
     }
 
     private boolean hasMiniMaxKey() {
@@ -271,6 +273,7 @@ public class AgentChatActivity extends AppCompatActivity {
         if (planningExecutor != null) {
             planningExecutor.shutdownNow();
         }
+        bgExecutor.shutdownNow();
     }
 
     private void addUser(String text) {

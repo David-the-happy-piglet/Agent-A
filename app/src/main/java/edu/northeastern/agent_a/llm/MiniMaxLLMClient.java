@@ -32,15 +32,12 @@ public class MiniMaxLLMClient implements LLMClient {
     private static final String TAG = "MiniMaxLLMClient";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
-    private static final String HELP_MESSAGE =
-            "I can help you with calls, text messages, navigation, and email summaries. "
-                    + "Try: \"Call Mom\", \"Text John saying meet at 5\", "
-                    + "\"Navigate to Boston\", or \"Show my emails\".";
     private static final String JSON_OUTPUT_REMINDER =
             "\n\nReturn only one JSON object in this exact shape: "
                     + "{\"message\":\"...\",\"steps\":[{\"tool\":\"...\",\"args\":{\"key\":\"value\"}}]}. "
-                    + "If the request is not an actionable phone task, return "
-                    + "{\"message\":\"" + HELP_MESSAGE.replace("\"", "\\\"") + "\",\"steps\":[]}. "
+                    + "Use tool steps whenever the request matches an available tool, including news.fetch for news requests. "
+                    + "Never invent tool names that are not listed. "
+                    + "If no tool is needed, return a normal conversational reply in \"message\" and use an empty steps array. "
                     + "Do not add markdown fences, examples, or explanation.";
 
     private final ToolRegistry registry;
@@ -145,14 +142,17 @@ public class MiniMaxLLMClient implements LLMClient {
         try {
             planJson = parseStructuredContent(content);
         } catch (JSONException e) {
-            Log.w(TAG, "MiniMax returned non-JSON content, falling back to help message: " + content);
-            return new Plan(Collections.emptyList(), HELP_MESSAGE);
+            Log.w(TAG, "MiniMax returned non-JSON content, falling back to plain text: " + content);
+            return new Plan(Collections.emptyList(), content);
         }
 
         String assistantMessage = planJson.optString("message", "");
+        int originalStepCount = 0;
         JSONArray stepsJson = planJson.optJSONArray("steps");
         if (stepsJson == null) {
             stepsJson = new JSONArray();
+        } else {
+            originalStepCount = stepsJson.length();
         }
 
         List<ActionSpec> steps = new ArrayList<>();
@@ -160,6 +160,7 @@ public class MiniMaxLLMClient implements LLMClient {
             JSONObject step = stepsJson.getJSONObject(i);
             String toolName = step.optString("tool", "").trim();
             if (toolName.isEmpty() || !registry.has(toolName)) {
+                Log.w(TAG, "Ignoring unsupported tool from model: " + toolName);
                 continue;
             }
 
@@ -182,12 +183,12 @@ public class MiniMaxLLMClient implements LLMClient {
 
         if (assistantMessage.isEmpty()) {
             assistantMessage = steps.isEmpty()
-                    ? HELP_MESSAGE
+                    ? content
                     : "Here's the plan:";
         }
 
-        if (steps.isEmpty()) {
-            assistantMessage = HELP_MESSAGE;
+        if (steps.isEmpty() && originalStepCount > 0 && assistantMessage.equals(content)) {
+            assistantMessage = "I can't perform that action in this app yet, but I can still chat about it.";
         }
 
         return new Plan(steps, assistantMessage);

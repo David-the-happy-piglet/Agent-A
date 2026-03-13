@@ -16,15 +16,17 @@ public class PromptBuilder {
 
     private static final String SYSTEM_INSTRUCTIONS =
             "You are an AI agent running on an Android phone.\n"
-                    + "Plan the user's request using ONLY the tools listed below.\n"
+                    + "If the user's request can be handled by one or more of the tools listed below, plan it using ONLY those tools.\n"
+                    + "This includes calling, texting, navigation, email summary, and news fetching.\n"
+                    + "If the user is chatting or asking a general question that does not need a tool, answer conversationally and use no tools.\n"
                     + "Return STRICT JSON only with this shape:\n"
                     + "  {\"message\":\"<short assistant reply>\",\"steps\":[{\"tool\":\"<tool_name>\",\"args\":{\"<key>\":\"<value>\"}}]}\n"
                     + "Each step object must use the form:\n"
                     + "  {\"tool\": \"<tool_name>\", \"args\": {\"<key>\": \"<value>\", ...}}\n"
                     + "If a step needs output from a previous step (e.g. a phone number from contacts.lookup), "
                     + "use \"[from_lookup]\" as the placeholder value.\n"
-                    + "If the request is unclear or unsupported, return an empty steps array "
-                    + "and include a helpful message.\n"
+                    + "Never invent tools that are not listed below.\n"
+                    + "If no available tool fits the request, return an empty steps array and put your normal reply in \"message\".\n"
                     + "Do not wrap the JSON in markdown fences or add any extra commentary.\n";
 
     public LLMRequest build(String userQuery, SessionStore session,
