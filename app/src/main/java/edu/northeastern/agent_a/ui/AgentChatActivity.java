@@ -19,6 +19,9 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 
+import edu.northeastern.agent_a.llm.GeminiLLMClient;
+import edu.northeastern.agent_a.BuildConfig;
+
 import java.util.List;
 
 import edu.northeastern.agent_a.R;
@@ -118,7 +121,9 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
 
-        planner = new Planner(new MockLLMClient(), registry);
+//        planner = new Planner(new MockLLMClient(), registry);
+        planner = new Planner(new GeminiLLMClient(BuildConfig.GEMINI_API_KEY), registry);
+//        planner = new Planner(new GeminiLLMClient("AIzaSyDCG4ta-9njgshbE12Kn0JmXKpHXwT0M7w"), registry);
         executor = new Executor(registry);
         policy = new Policy();
     }
@@ -130,12 +135,58 @@ public class AgentChatActivity extends AppCompatActivity {
         handleUserInput(text);
     }
 
+//    private void handleUserInput(String text) {
+//        addUser(text);
+//        setStatus(getString(R.string.status_planning));
+//
+//        Plan plan = planner.createPlan(text, sessionStore);
+//
+//        if (!plan.hasActions()) {
+//            addAssistant(plan.getAssistantMessage());
+//            setStatus(getString(R.string.status_ready));
+//            return;
+//        }
+//
+//        setStatus("Planned " + plan.getActions().size() + " action(s). Awaiting confirmation…");
+//
+//        if (policy.requiresPreview(plan)) {
+//            pendingPlan = plan;
+//            ActionPreviewHelper.show(this, plan, new ActionPreviewHelper.Callback() {
+//                @Override
+//                public void onConfirm() {
+//                    addAssistant(plan.getAssistantMessage());
+//                    executePlan(plan, text);
+//                }
+//
+//                @Override
+//                public void onCancel() {
+//                    addAssistant(getString(R.string.cancelled));
+//                    setStatus(getString(R.string.status_ready));
+//                    pendingPlan = null;
+//                }
+//            });
+//        } else {
+//            addAssistant(plan.getAssistantMessage());
+//            executePlan(plan, text);
+//        }
+//    }
+    // 只需替换 handleUserInput 方法，其余代码不变
+
     private void handleUserInput(String text) {
         addUser(text);
         setStatus(getString(R.string.status_planning));
+        btnSend.setEnabled(false);  // 防止重复提交
 
-        Plan plan = planner.createPlan(text, sessionStore);
+        new Thread(() -> {
+            Plan plan = planner.createPlan(text, sessionStore);
+            runOnUiThread(() -> {
+                btnSend.setEnabled(true);
+                onPlanReady(plan, text);
+            });
+        }).start();
+    }
 
+    private void onPlanReady(Plan plan, String originalText) {
         if (!plan.hasActions()) {
             addAssistant(plan.getAssistantMessage());
             setStatus(getString(R.string.status_ready));
@@ -150,9 +201,8 @@ public class AgentChatActivity extends AppCompatActivity {
                 @Override
                 public void onConfirm() {
                     addAssistant(plan.getAssistantMessage());
-                    executePlan(plan, text);
+                    executePlan(plan, originalText);
                 }
-
                 @Override
                 public void onCancel() {
                     addAssistant(getString(R.string.cancelled));
@@ -162,7 +212,7 @@ public class AgentChatActivity extends AppCompatActivity {
             });
         } else {
             addAssistant(plan.getAssistantMessage());
-            executePlan(plan, text);
+            executePlan(plan, originalText);
         }
     }
 
