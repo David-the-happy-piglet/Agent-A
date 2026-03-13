@@ -1,8 +1,8 @@
 package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
-import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -20,7 +20,10 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.button.MaterialButton;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import edu.northeastern.agent_a.BuildConfig;
 import edu.northeastern.agent_a.R;
 import edu.northeastern.agent_a.core.agent.Executor;
 import edu.northeastern.agent_a.core.agent.Planner;
@@ -35,9 +38,12 @@ import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
+import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
 
 public class AgentChatActivity extends AppCompatActivity {
+
+    private static final String TAG = "AgentChatActivity";
 
     private RecyclerView rvMessages;
     private EditText etInput;
@@ -49,6 +55,8 @@ public class AgentChatActivity extends AppCompatActivity {
     private Planner planner;
     private Executor executor;
     private Policy policy;
+    private ExecutorService planningExecutor;
+    private String plannerModeLabel = "Mock";
 
     private Plan pendingPlan;
     private String pendingRetryText;
@@ -64,6 +72,7 @@ public class AgentChatActivity extends AppCompatActivity {
                             handleUserInput(retryText);
                         } else if (!granted) {
                             addAssistant("Permission denied. Please provide the phone number directly.");
+                            setInputEnabled(true);
                         }
                     });
 
@@ -93,6 +102,7 @@ public class AgentChatActivity extends AppCompatActivity {
 
         sessionStore = new SessionStore();
         adapter = new ChatAdapter(sessionStore.getMessages());
+        planningExecutor = Executors.newSingleThreadExecutor();
 
         LinearLayoutManager lm = new LinearLayoutManager(this);
         lm.setStackFromEnd(true);
@@ -118,7 +128,19 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
 
-        planner = new Planner(new MockLLMClient(), registry);
+        if (hasMiniMaxKey()) {
+            planner = new Planner(new MiniMaxLLMClient(registry), registry);
+            plannerModeLabel = "MiniMax";
+            Log.i(TAG, "Planner mode: MiniMaxLLMClient");
+            addAssistant("Planner mode: MiniMax");
+            setStatus("Planner: MiniMax ready");
+        } else {
+            planner = new Planner(new MockLLMClient(), registry);
+            plannerModeLabel = "Mock";
+            Log.i(TAG, "Planner mode: MockLLMClient");
+            addAssistant("Planner mode: Mock");
+            setStatus("Planner: Mock ready");
+        }
         executor = new Executor(registry);
         policy = new Policy();
     }
@@ -132,13 +154,28 @@ public class AgentChatActivity extends AppCompatActivity {
 
     private void handleUserInput(String text) {
         addUser(text);
-        setStatus(getString(R.string.status_planning));
+        setInputEnabled(false);
+        setStatus("Planner: " + plannerModeLabel + " planning...");
 
-        Plan plan = planner.createPlan(text, sessionStore);
+        planningExecutor.execute(() -> {
+            try {
+                Plan plan = planner.createPlan(text, sessionStore);
+                runOnUiThread(() -> presentPlan(plan, text));
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    addAssistant("Planning failed: " + e.getMessage());
+                    setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
+                });
+            }
+        });
+    }
 
+    private void presentPlan(Plan plan, String originalUserText) {
         if (!plan.hasActions()) {
             addAssistant(plan.getAssistantMessage());
             setStatus(getString(R.string.status_ready));
+            setInputEnabled(true);
             return;
         }
 
@@ -150,19 +187,20 @@ public class AgentChatActivity extends AppCompatActivity {
                 @Override
                 public void onConfirm() {
                     addAssistant(plan.getAssistantMessage());
-                    executePlan(plan, text);
+                    executePlan(plan, originalUserText);
                 }
 
                 @Override
                 public void onCancel() {
                     addAssistant(getString(R.string.cancelled));
                     setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
                     pendingPlan = null;
                 }
             });
         } else {
             addAssistant(plan.getAssistantMessage());
-            executePlan(plan, text);
+            executePlan(plan, originalUserText);
         }
     }
 
@@ -191,7 +229,25 @@ public class AgentChatActivity extends AppCompatActivity {
         }
 
         setStatus(getString(R.string.status_ready));
+        setInputEnabled(true);
         pendingPlan = null;
+    }
+
+    private boolean hasMiniMaxKey() {
+        return !BuildConfig.MINIMAX_API_KEY.trim().isEmpty();
+    }
+
+    private void setInputEnabled(boolean enabled) {
+        etInput.setEnabled(enabled);
+        btnSend.setEnabled(enabled);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (planningExecutor != null) {
+            planningExecutor.shutdownNow();
+        }
     }
 
     private void addUser(String text) {
