@@ -27,8 +27,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY", "")
-        val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
-        val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "MiniMax-M2.1")
+        val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimax.io/v1/text/chatcompletion_v2")
+        val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
 
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
         buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")

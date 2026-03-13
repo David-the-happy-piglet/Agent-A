@@ -32,6 +32,16 @@ public class MiniMaxLLMClient implements LLMClient {
     private static final String TAG = "MiniMaxLLMClient";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
+    private static final String HELP_MESSAGE =
+            "I can help you with calls, text messages, navigation, and email summaries. "
+                    + "Try: \"Call Mom\", \"Text John saying meet at 5\", "
+                    + "\"Navigate to Boston\", or \"Show my emails\".";
+    private static final String JSON_OUTPUT_REMINDER =
+            "\n\nReturn only one JSON object in this exact shape: "
+                    + "{\"message\":\"...\",\"steps\":[{\"tool\":\"...\",\"args\":{\"key\":\"value\"}}]}. "
+                    + "If the request is not an actionable phone task, return "
+                    + "{\"message\":\"" + HELP_MESSAGE.replace("\"", "\\\"") + "\",\"steps\":[]}. "
+                    + "Do not add markdown fences, examples, or explanation.";
 
     private final ToolRegistry registry;
     private final String apiKey;
@@ -46,10 +56,10 @@ public class MiniMaxLLMClient implements LLMClient {
         this.registry = registry;
         this.apiKey = apiKey != null ? apiKey.trim() : "";
         this.baseUrl = (baseUrl == null || baseUrl.trim().isEmpty())
-                ? "https://api.minimaxi.com/v1"
+                ? "https://api.minimax.io/v1/text/chatcompletion_v2"
                 : baseUrl.trim();
         this.model = (model == null || model.trim().isEmpty())
-                ? "MiniMax-M2.1"
+                ? "M2-her"
                 : model.trim();
     }
 
@@ -61,7 +71,7 @@ public class MiniMaxLLMClient implements LLMClient {
 
         HttpURLConnection connection = null;
         try {
-            URL url = new URL(baseUrl + "/chat/completions");
+            URL url = new URL(baseUrl);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
@@ -103,10 +113,12 @@ public class MiniMaxLLMClient implements LLMClient {
         JSONArray messages = new JSONArray();
         messages.put(new JSONObject()
                 .put("role", "system")
-                .put("content", request.getSystemPrompt()));
+                .put("name", "MiniMax AI")
+                .put("content", request.getSystemPrompt() + JSON_OUTPUT_REMINDER));
         messages.put(new JSONObject()
                 .put("role", "user")
-                .put("content", request.getUserQuery()));
+                .put("name", "User")
+                .put("content", request.getUserQuery() + JSON_OUTPUT_REMINDER));
         body.put("messages", messages);
         return body.toString();
     }
@@ -129,8 +141,15 @@ public class MiniMaxLLMClient implements LLMClient {
             throw new IllegalStateException("MiniMax returned empty message content.");
         }
 
-        JSONObject planJson = parseJsonObject(content);
-        String assistantMessage = planJson.optString("message", "Here's the plan:");
+        JSONObject planJson;
+        try {
+            planJson = parseStructuredContent(content);
+        } catch (JSONException e) {
+            Log.w(TAG, "MiniMax returned non-JSON content, falling back to help message: " + content);
+            return new Plan(Collections.emptyList(), HELP_MESSAGE);
+        }
+
+        String assistantMessage = planJson.optString("message", "");
         JSONArray stepsJson = planJson.optJSONArray("steps");
         if (stepsJson == null) {
             stepsJson = new JSONArray();
@@ -140,7 +159,7 @@ public class MiniMaxLLMClient implements LLMClient {
         for (int i = 0; i < stepsJson.length(); i++) {
             JSONObject step = stepsJson.getJSONObject(i);
             String toolName = step.optString("tool", "").trim();
-            if (toolName.isEmpty()) {
+            if (toolName.isEmpty() || !registry.has(toolName)) {
                 continue;
             }
 
@@ -161,24 +180,50 @@ public class MiniMaxLLMClient implements LLMClient {
                     humanDescription(toolName, args)));
         }
 
+        if (assistantMessage.isEmpty()) {
+            assistantMessage = steps.isEmpty()
+                    ? HELP_MESSAGE
+                    : "Here's the plan:";
+        }
+
+        if (steps.isEmpty()) {
+            assistantMessage = HELP_MESSAGE;
+        }
+
         return new Plan(steps, assistantMessage);
     }
 
-    private JSONObject parseJsonObject(String content) throws JSONException {
+    private JSONObject parseStructuredContent(String content) throws JSONException {
         String trimmed = content.trim();
         if (trimmed.startsWith("```")) {
-            trimmed = trimmed.replaceFirst("^```(?:json)?", "").replaceFirst("```$", "").trim();
+            trimmed = trimmed
+                    .replaceFirst("^```(?:json)?\\s*", "")
+                    .replaceFirst("\\s*```$", "")
+                    .trim();
         }
 
         try {
             return new JSONObject(trimmed);
-        } catch (JSONException ignored) {
-            int first = trimmed.indexOf('{');
-            int last = trimmed.lastIndexOf('}');
-            if (first >= 0 && last > first) {
-                return new JSONObject(trimmed.substring(first, last + 1));
+        } catch (JSONException objectError) {
+            try {
+                JSONArray array = new JSONArray(trimmed);
+                return new JSONObject().put("message", "Here's the plan:").put("steps", array);
+            } catch (JSONException arrayError) {
+                int firstObject = trimmed.indexOf('{');
+                int lastObject = trimmed.lastIndexOf('}');
+                if (firstObject >= 0 && lastObject > firstObject) {
+                    return new JSONObject(trimmed.substring(firstObject, lastObject + 1));
+                }
+
+                int firstArray = trimmed.indexOf('[');
+                int lastArray = trimmed.lastIndexOf(']');
+                if (firstArray >= 0 && lastArray > firstArray) {
+                    JSONArray array = new JSONArray(trimmed.substring(firstArray, lastArray + 1));
+                    return new JSONObject().put("message", "Here's the plan:").put("steps", array);
+                }
+
+                throw objectError;
             }
-            throw ignored;
         }
     }
 
