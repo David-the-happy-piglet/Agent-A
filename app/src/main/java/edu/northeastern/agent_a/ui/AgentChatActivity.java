@@ -8,6 +8,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
+import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.ImageButton;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import edu.northeastern.agent_a.BuildConfig;
 import edu.northeastern.agent_a.R;
 import edu.northeastern.agent_a.core.agent.Executor;
 import edu.northeastern.agent_a.core.agent.Planner;
@@ -47,6 +49,7 @@ import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
+import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
 
 
@@ -88,15 +91,21 @@ public class AgentChatActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_agent_chat);
-
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
-        });
-
         initViews();
         initAgent();
+        View inputArea = findViewById(R.id.inputArea);
+        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
+
+            // 如果键盘弹出，使用键盘高度；如果没弹出，使用系统导航栏高度
+            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
+
+            return WindowInsetsCompat.CONSUMED;
+        });
+
+
 
         addAssistant(getString(R.string.welcome_message));
     }
@@ -127,6 +136,7 @@ public class AgentChatActivity extends AppCompatActivity {
     }
 
     private void initAgent() {
+        String apiKey = BuildConfig.GEMINI_API_KEY;
         ToolRegistry registry = new ToolRegistry();
         registry.register(new PhoneDialTool());
         registry.register(new SmsComposeTool());
@@ -135,6 +145,7 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new EmailSummaryTool());
 
         planner = new Planner(new MockLLMClient(), registry);
+       // planner = new Planner(new GeminiLLMClient(apiKey), registry);
         executor = new Executor(registry);
         policy = new Policy();
     }
@@ -269,58 +280,78 @@ public class AgentChatActivity extends AppCompatActivity {
     private boolean isListening = false;
     private void handleVoiceButtonClick() {
         if (!isListening) {
-            // 如果当前没在录，就去查权限并开启
             checkAndRequestAudioPermission();
             isListening = true;
-            setStatus("Listening..."); // 给用户反馈
+            setStatus("Listening...");
+            // 切换为“停止”图标 (这里使用系统自带的停止图标，你也可以换成自己的)
+            btnVoice.setImageResource(android.R.drawable.ic_media_pause);
         } else {
-            // 如果正在录，点击则停止
-            if (speechRecognizer != null) {
-                speechRecognizer.stopListening(); // 关键：这会触发 onResults
-            }
-            isListening = false;
-            setStatus(getString(R.string.status_ready));
+            stopVoiceAction();
         }
     }
+    private void stopVoiceAction() {
+        if (speechRecognizer != null) {
+            speechRecognizer.stopListening();
+        }
+        isListening = false;
+        setStatus(getString(R.string.status_ready));
+        // 切换回“麦克风”图标
+        btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+    }
     private void startVoiceRecognition() {
-        // 1. 初始化检查
-        if (speechRecognizer == null) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-
-            speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                @Override
-                public void onResults(Bundle results) {
-                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (matches != null && !matches.isEmpty()) {
-                        String spokenText = matches.get(0);
-                        etInput.setText(spokenText);
-                        handleUserInput(spokenText);
-
-                    }
-                }
-
-                @Override
-                public void onError(int error) {
-                    isListening = false;
-                    String message = "Error: " + error;
-                    Toast.makeText(AgentChatActivity.this, message, Toast.LENGTH_SHORT).show();
-                }
-
-                // 其他 override 方法可以暂时留空
-                @Override public void onReadyForSpeech(Bundle params) {}
-                @Override public void onBeginningOfSpeech() {}
-                @Override public void onRmsChanged(float rmsdB) {}
-                @Override public void onBufferReceived(byte[] buffer) {}
-                @Override public void onEndOfSpeech() {}
-                @Override public void onPartialResults(Bundle partialResults) {}
-                @Override public void onEvent(int eventType, Bundle params) {}
-            });
+        // 关键：如果正在监听，先执行停止，并短暂停顿
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+            speechRecognizer.destroy();
+            speechRecognizer = null;
         }
 
-        // 2. 开始监听
+        // 重新创建实例
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+
+        // 配置 Intent 时增加语种偏好，防止 Error 11 (部分模拟器离线包缺失导致)
+        if (speechRecognizerIntent == null) {
+            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString());
+            // 关键：强制使用网络识别，通常在模拟器上比本地更稳，减少 Error 11
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+        }
+
+        speechRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onResults(Bundle results) {
+                stopVoiceAction();
+                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (matches != null && !matches.isEmpty()) {
+                    String spokenText = matches.get(0);
+                    etInput.setText(spokenText);
+                    handleUserInput(spokenText);
+                    etInput.setText("");
+                }
+            }
+
+            @Override
+            public void onError(int error) {
+
+                stopVoiceAction();
+                // 针对 Error 11 的特别处理：提示用户检查网络或 Google 服务
+                if (error == 11) {
+                    Toast.makeText(AgentChatActivity.this, "Speech engine busy or disconnected. Retrying...", Toast.LENGTH_SHORT).show();
+                }
+            }
+            @Override public void onReadyForSpeech(Bundle params) {}
+            @Override public void onBeginningOfSpeech() {}
+            @Override public void onRmsChanged(float rmsdB) {}
+            @Override public void onBufferReceived(byte[] buffer) {}
+            @Override public void onEndOfSpeech() {}
+            @Override public void onPartialResults(Bundle partialResults) {}
+            @Override public void onEvent(int eventType, Bundle params) {}
+        });
+
+        isListening = true;
+        btnVoice.setImageResource(android.R.drawable.ic_media_pause);
+        setStatus("Listening...");
         speechRecognizer.startListening(speechRecognizerIntent);
     }
 }
