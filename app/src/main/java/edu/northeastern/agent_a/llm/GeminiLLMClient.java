@@ -84,7 +84,6 @@ public class GeminiLLMClient implements LLMClient {
         body.put("generationConfig", genConfig);
 
         String fullUrl = API_URL + apiKey;
-        Log.d(TAG, "Full URL length: " + fullUrl.length() + " key length: " + apiKey.length());
 
         Request httpRequest = new Request.Builder()
                 .url(API_URL)
@@ -103,7 +102,6 @@ public class GeminiLLMClient implements LLMClient {
             if (!response.isSuccessful() || response.body() == null) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
                 Log.e(TAG, "Attempt " + attempt + " HTTP error: " + response.code() + " body: " + errorBody);
-                Log.d(TAG, "API Key prefix: " + apiKey.substring(0, 8));
                 if (response.code() == 429) return null;
                 if (response.code() == 403) {
                     return errorPlan("API key invalid or not yet activated.");
