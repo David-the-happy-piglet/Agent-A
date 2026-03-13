@@ -34,9 +34,13 @@ public class MockLLMClient implements LLMClient {
                     + "\u2022 Call / dial a number or contact\n"
                     + "\u2022 Send a text message (SMS)\n"
                     + "\u2022 Navigate to a destination\n"
-                    + "\u2022 Check email inbox summary\n\n"
-                    + "Try: \"Call 555-1234\", \"Text 555-1234 hello\", "
-                    + "\"Navigate to Boston\", or \"Show my emails\".";
+                    + "\u2022 Check email inbox summary\n"
+                    + "\u2022 Fetch news — supported categories:\n"
+                    + "    general \u00b7 tech \u00b7 ai \u00b7 finance \u00b7 politics\n"
+                    + "    crypto \u00b7 science \u00b7 security \u00b7 startups\n"
+                    + "    energy \u00b7 asia \u00b7 middleeast\n\n"
+                    + "Try: \"News today\", \"AI news\", \"Crypto headlines\", "
+                    + "\"Asia news\", or \"Startup funding news\".";
 
     @Override
     public Plan call(LLMRequest request) {
@@ -67,6 +71,11 @@ public class MockLLMClient implements LLMClient {
         if (matchesAny(lower, "email", "\u90ae\u4ef6", "inbox",
                 "\u6536\u4ef6\u7bb1", "mail")) {
             return planEmail();
+        }
+        if (matchesAny(lower, "news", "headlines", "latest news", "what's new",
+                "\u65b0\u95fb", "\u5934\u6761", "\u79d1\u6280\u65b0\u95fb",
+                "\u8d22\u7ecf\u65b0\u95fb", "\u653f\u6cbb\u65b0\u95fb")) {
+            return planNews(userText);
         }
 
         return new Plan(Collections.emptyList(), HELP_TEXT);
@@ -136,6 +145,52 @@ public class MockLLMClient implements LLMClient {
                 stepsOf(step("email.summary", argsOf("mode", "inbox"),
                         RiskLevel.LOW, "email.summary(mode=\"inbox\")")),
                 "Here's your email summary:");
+    }
+
+    private Plan planNews(String userText) {
+        String lower = userText.toLowerCase();
+        String category;
+        if (matchesAny(lower, "ai", "artificial intelligence",
+                "\u4eba\u5de5\u667a\u80fd", "\u673a\u5668\u5b66\u4e60")) {
+            category = "ai";
+        } else if (matchesAny(lower, "crypto", "bitcoin", "ethereum", "blockchain",
+                "\u52a0\u5bc6\u8d27\u5e01", "\u6bd4\u7279\u5e01")) {
+            category = "crypto";
+        } else if (matchesAny(lower, "finance", "market", "stock", "wall street",
+                "\u91d1\u878d", "\u80a1\u5e02", "\u534e\u5c14\u8857")) {
+            category = "finance";
+        } else if (matchesAny(lower, "politics", "political", "government",
+                "\u653f\u6cbb", "\u653f\u5e9c")) {
+            category = "politics";
+        } else if (matchesAny(lower, "science", "research", "discovery",
+                "\u79d1\u5b66", "\u7814\u7a76")) {
+            category = "science";
+        } else if (matchesAny(lower, "security", "cyber", "hack", "vulnerability",
+                "\u5b89\u5168", "\u7f51\u7edc\u5b89\u5168")) {
+            category = "security";
+        } else if (matchesAny(lower, "startup", "startups", "venture", "funding",
+                "\u521b\u4e1a", "\u878d\u8d44")) {
+            category = "startups";
+        } else if (matchesAny(lower, "energy", "oil", "opec", "nuclear",
+                "\u80fd\u6e90", "\u77f3\u6cb9", "\u6838\u80fd")) {
+            category = "energy";
+        } else if (matchesAny(lower, "asia", "china", "japan", "korea", "india",
+                "\u4e9a\u6d32", "\u4e2d\u56fd", "\u65e5\u672c", "\u97e9\u56fd")) {
+            category = "asia";
+        } else if (matchesAny(lower, "middle east", "middleeast", "israel", "iran",
+                "gaza", "arab", "\u4e2d\u4e1c")) {
+            category = "middleeast";
+        } else if (matchesAny(lower, "tech", "technology", "software", "hardware",
+                "\u79d1\u6280", "\u6280\u672f")) {
+            category = "tech";
+        } else {
+            // No specific category detected — return top world headlines
+            category = "general";
+        }
+        return new Plan(
+                stepsOf(step("news.fetch", argsOf("category", category),
+                        RiskLevel.LOW, "news.fetch(category=\"" + category + "\")")),
+                "Here are the latest " + category + " headlines:");
     }
 
     // ── text parsing helpers ────────────────────────────────────────────

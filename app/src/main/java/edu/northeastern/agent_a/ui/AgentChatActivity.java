@@ -8,6 +8,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
+import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.ImageButton;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import edu.northeastern.agent_a.BuildConfig;
 import edu.northeastern.agent_a.R;
 import edu.northeastern.agent_a.core.agent.Executor;
 import edu.northeastern.agent_a.core.agent.Planner;
@@ -47,6 +49,7 @@ import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
+import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
 
 
@@ -88,15 +91,21 @@ public class AgentChatActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_agent_chat);
-
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
-        });
-
         initViews();
         initAgent();
+        View inputArea = findViewById(R.id.etInput);
+        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
+
+            // 如果键盘弹出，使用键盘高度；如果没弹出，使用系统导航栏高度
+            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
+
+            return WindowInsetsCompat.CONSUMED;
+        });
+
+
 
         addAssistant(getString(R.string.welcome_message));
     }
@@ -127,6 +136,7 @@ public class AgentChatActivity extends AppCompatActivity {
     }
 
     private void initAgent() {
+        String apiKey = BuildConfig.GEMINI_API_KEY;
         ToolRegistry registry = new ToolRegistry();
         registry.register(new PhoneDialTool());
         registry.register(new SmsComposeTool());
@@ -135,6 +145,7 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new EmailSummaryTool());
 
         planner = new Planner(new MockLLMClient(), registry);
+       // planner = new Planner(new GeminiLLMClient(apiKey), registry);
         executor = new Executor(registry);
         policy = new Policy();
     }
@@ -263,64 +274,99 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
-    // 4. 语音识别的入口（这是你下一步要写的逻辑）
+
     private SpeechRecognizer speechRecognizer;
     private Intent speechRecognizerIntent;
     private boolean isListening = false;
     private void handleVoiceButtonClick() {
+        if (tvStatus.getText().toString().contains("busy")) {
+            isListening = false;
+            if (speechRecognizer != null) {
+                speechRecognizer.destroy();
+                speechRecognizer = null;
+            }
+        }
         if (!isListening) {
-            // 如果当前没在录，就去查权限并开启
             checkAndRequestAudioPermission();
             isListening = true;
-            setStatus("Listening..."); // 给用户反馈
+            setStatus("Listening...");
+            // 切换为“停止”图标 (这里使用系统自带的停止图标，你也可以换成自己的)
+            btnVoice.setImageResource(android.R.drawable.ic_media_pause);
         } else {
-            // 如果正在录，点击则停止
-            if (speechRecognizer != null) {
-                speechRecognizer.stopListening(); // 关键：这会触发 onResults
-            }
-            isListening = false;
-            setStatus(getString(R.string.status_ready));
+            stopVoiceAction();
         }
     }
-    private void startVoiceRecognition() {
-        // 1. 初始化检查
-        if (speechRecognizer == null) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+    private void stopVoiceAction() {
+        isListening = false;
+        if (speechRecognizer != null) {
+            speechRecognizer.stopListening();
+        }
 
+
+
+        btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+    }
+    private void startVoiceRecognition() {
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+        } else {
+            // 只有为空时才创建
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
             speechRecognizer.setRecognitionListener(new RecognitionListener() {
                 @Override
                 public void onResults(Bundle results) {
+
                     ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches != null && !matches.isEmpty()) {
                         String spokenText = matches.get(0);
-                        etInput.setText(spokenText);
                         handleUserInput(spokenText);
-
+                        etInput.setText(""); // 清空输入框
                     }
+                    stopVoiceAction();
                 }
 
                 @Override
                 public void onError(int error) {
-                    isListening = false;
-                    String message = "Error: " + error;
-                    Toast.makeText(AgentChatActivity.this, message, Toast.LENGTH_SHORT).show();
-                }
+                    stopVoiceAction();
 
-                // 其他 override 方法可以暂时留空
+                    if (error == SpeechRecognizer.ERROR_CLIENT ) {
+                        setStatus("Voice engine is busy. tap again.");
+                        if (speechRecognizer != null) {
+                            speechRecognizer.destroy();
+                            speechRecognizer = null;
+                        }
+                    } else if (error == 7) {
+                        setStatus("No match found. Try again.");
+                    } else {
+                        setStatus("Error: " + error + ". Tap again.");
+                    }
+                }
                 @Override public void onReadyForSpeech(Bundle params) {}
                 @Override public void onBeginningOfSpeech() {}
                 @Override public void onRmsChanged(float rmsdB) {}
                 @Override public void onBufferReceived(byte[] buffer) {}
-                @Override public void onEndOfSpeech() {}
+                @Override public void onEndOfSpeech() {
+                    btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+                    setStatus("Processing...");
+                }
                 @Override public void onPartialResults(Bundle partialResults) {}
                 @Override public void onEvent(int eventType, Bundle params) {}
+
             });
         }
 
-        // 2. 开始监听
+
+        if (speechRecognizerIntent == null) {
+            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        }
+
+        isListening = true;
+        btnVoice.setImageResource(android.R.drawable.ic_media_pause);
+        setStatus("Listening...");
         speechRecognizer.startListening(speechRecognizerIntent);
     }
 }
