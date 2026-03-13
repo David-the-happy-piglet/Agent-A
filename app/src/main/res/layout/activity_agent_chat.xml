@@ -57,6 +57,14 @@
             android:paddingVertical="10dp"
             android:textSize="15sp" />
 
+        <ImageButton
+            android:id="@+id/btnVoice"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@android:drawable/ic_btn_speak_now"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Voice Input" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSend"
             style="@style/Widget.Material3.Button.TonalButton"
