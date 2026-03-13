@@ -279,6 +279,13 @@ public class AgentChatActivity extends AppCompatActivity {
     private Intent speechRecognizerIntent;
     private boolean isListening = false;
     private void handleVoiceButtonClick() {
+        if (tvStatus.getText().toString().contains("busy")) {
+            isListening = false;
+            if (speechRecognizer != null) {
+                speechRecognizer.destroy();
+                speechRecognizer = null;
+            }
+        }
         if (!isListening) {
             checkAndRequestAudioPermission();
             isListening = true;
@@ -290,64 +297,72 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
     private void stopVoiceAction() {
+        isListening = false;
         if (speechRecognizer != null) {
             speechRecognizer.stopListening();
         }
-        isListening = false;
-        setStatus(getString(R.string.status_ready));
+
+
         // 切换回“麦克风”图标
         btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
     }
     private void startVoiceRecognition() {
-        // 关键：如果正在监听，先执行停止，并短暂停顿
         if (speechRecognizer != null) {
             speechRecognizer.cancel();
-            speechRecognizer.destroy();
-            speechRecognizer = null;
+        } else {
+            // 只有为空时才创建
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override
+                public void onResults(Bundle results) {
+
+                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (matches != null && !matches.isEmpty()) {
+                        String spokenText = matches.get(0);
+                        handleUserInput(spokenText);
+                        etInput.setText(""); // 清空输入框
+                    }
+                    stopVoiceAction();
+                }
+
+                @Override
+                public void onError(int error) {
+                    stopVoiceAction();
+
+                    if (error == SpeechRecognizer.ERROR_CLIENT ) {
+                        setStatus("Voice engine is busy. tap again.");
+                        if (speechRecognizer != null) {
+                            speechRecognizer.destroy();
+                            speechRecognizer = null;
+                        }
+                    } else if (error == 7) {
+                        setStatus("No match found. Try again.");
+                    } else {
+                        setStatus("Error: " + error + ". Tap again.");
+                    }
+                }
+                @Override public void onReadyForSpeech(Bundle params) {}
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float rmsdB) {}
+                @Override public void onBufferReceived(byte[] buffer) {}
+                @Override public void onEndOfSpeech() {
+                    btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+                    setStatus("Processing...");
+                }
+                @Override public void onPartialResults(Bundle partialResults) {}
+                @Override public void onEvent(int eventType, Bundle params) {}
+
+            });
         }
 
-        // 重新创建实例
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-
-        // 配置 Intent 时增加语种偏好，防止 Error 11 (部分模拟器离线包缺失导致)
+        // 重新配置 Intent，确保语言设置正确
         if (speechRecognizerIntent == null) {
             speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString());
-            // 关键：强制使用网络识别，通常在模拟器上比本地更稳，减少 Error 11
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+            // 允许部分识别结果，提高响应速度
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         }
-
-        speechRecognizer.setRecognitionListener(new RecognitionListener() {
-            @Override
-            public void onResults(Bundle results) {
-                stopVoiceAction();
-                ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (matches != null && !matches.isEmpty()) {
-                    String spokenText = matches.get(0);
-                    etInput.setText(spokenText);
-                    handleUserInput(spokenText);
-                    etInput.setText("");
-                }
-            }
-
-            @Override
-            public void onError(int error) {
-
-                stopVoiceAction();
-                // 针对 Error 11 的特别处理：提示用户检查网络或 Google 服务
-                if (error == 11) {
-                    Toast.makeText(AgentChatActivity.this, "Speech engine busy or disconnected. Retrying...", Toast.LENGTH_SHORT).show();
-                }
-            }
-            @Override public void onReadyForSpeech(Bundle params) {}
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rmsdB) {}
-            @Override public void onBufferReceived(byte[] buffer) {}
-            @Override public void onEndOfSpeech() {}
-            @Override public void onPartialResults(Bundle partialResults) {}
-            @Override public void onEvent(int eventType, Bundle params) {}
-        });
 
         isListening = true;
         btnVoice.setImageResource(android.R.drawable.ic_media_pause);
