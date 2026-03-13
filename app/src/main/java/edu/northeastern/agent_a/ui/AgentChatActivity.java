@@ -20,6 +20,8 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.button.MaterialButton;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import edu.northeastern.agent_a.R;
 import edu.northeastern.agent_a.core.agent.Executor;
@@ -29,6 +31,7 @@ import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
+import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
@@ -52,6 +55,9 @@ public class AgentChatActivity extends AppCompatActivity {
 
     private Plan pendingPlan;
     private String pendingRetryText;
+
+    // Single background thread for tool execution (network I/O must not run on UI thread)
+    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
     private final ActivityResultLauncher<String> contactsPermissionLauncher =
             registerForActivityResult(
@@ -117,6 +123,7 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new MapsNavigateTool());
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
+        registry.register(new NewsFeedTool());
 
         planner = new Planner(new MockLLMClient(), registry);
         executor = new Executor(registry);
@@ -167,31 +174,59 @@ public class AgentChatActivity extends AppCompatActivity {
     }
 
     private void executePlan(Plan plan, String originalUserText) {
-        List<ToolResult> results = executor.execute(this, plan);
+        setStatus(getString(R.string.status_executing));
+        btnSend.setEnabled(false);  // prevent double-submit while tools are running
 
-        for (int i = 0; i < results.size(); i++) {
-            ToolResult r = results.get(i);
-            String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
-
-            switch (r.getStatus()) {
-                case SUCCESS:
-                    addAssistant(stepLabel + r.displayText());
-                    break;
-                case NEED_PERMISSION:
-                    addAssistant(stepLabel + r.displayText());
-                    pendingRetryText = originalUserText;
-                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+        bgExecutor.execute(() -> {
+            List<ToolResult> results;
+            try {
+                results = executor.execute(this, plan);
+            } catch (Exception e) {
+                // Unexpected error from executor — restore UI and bail out
+                runOnUiThread(() -> {
+                    addAssistant("Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
-                    return;
-                case FAIL:
-                default:
-                    addAssistant(stepLabel + "Failed — " + r.displayText());
-                    break;
+                    pendingPlan = null;
+                    btnSend.setEnabled(true);
+                });
+                return;
             }
-        }
 
-        setStatus(getString(R.string.status_ready));
-        pendingPlan = null;
+            runOnUiThread(() -> {
+                for (int i = 0; i < results.size(); i++) {
+                    ToolResult r = results.get(i);
+                    String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
+
+                    switch (r.getStatus()) {
+                        case SUCCESS:
+                            addAssistant(stepLabel + r.displayText());
+                            break;
+                        case NEED_PERMISSION:
+                            addAssistant(stepLabel + r.displayText());
+                            pendingRetryText = originalUserText;
+                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+                            setStatus(getString(R.string.status_ready));
+                            pendingPlan = null;
+                            btnSend.setEnabled(true);
+                            return;
+                        case FAIL:
+                        default:
+                            addAssistant(stepLabel + "Failed — " + r.displayText());
+                            break;
+                    }
+                }
+
+                setStatus(getString(R.string.status_ready));
+                pendingPlan = null;
+                btnSend.setEnabled(true);  // re-enable input after all tools finish
+            });
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        bgExecutor.shutdownNow();
     }
 
     private void addUser(String text) {

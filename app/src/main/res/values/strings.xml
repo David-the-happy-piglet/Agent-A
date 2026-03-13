@@ -4,6 +4,7 @@
     <string name="btn_send">Send</string>
     <string name="status_ready">Agent ready</string>
     <string name="status_planning">Planning…</string>
+    <string name="status_executing">Fetching…</string>
     <string name="action_preview_title">Action Preview</string>
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
