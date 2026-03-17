@@ -1,8 +1,8 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
-
-import java.util.Properties
 
 val localProperties = Properties().apply {
     val localPropertiesFile = rootProject.file("local.properties")
@@ -13,9 +13,7 @@ val localProperties = Properties().apply {
 
 android {
     namespace = "edu.northeastern.agent_a"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "edu.northeastern.agent_a"
@@ -33,6 +31,11 @@ android {
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
         buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
         buildConfigField("String", "MINIMAX_MODEL", "\"$minimaxModel\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -44,13 +47,10 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 }
 
@@ -59,6 +59,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.constraintlayout)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

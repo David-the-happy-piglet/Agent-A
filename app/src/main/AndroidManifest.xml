@@ -5,10 +5,14 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Package visibility for Maps intent -->
     <queries>
         <package android:name="com.google.android.apps.maps" />
     </queries>
+
+    <uses-permission android:name="android.permission.INTERNET"/>
 
     <application
         android:allowBackup="true"
@@ -23,14 +27,16 @@
         <activity
             android:name=".ui.AgentChatActivity"
             android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize|stateUnchanged"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
         </activity>
 
-        <activity android:name=".MainActivity" />
+
     </application>
 
 </manifest>

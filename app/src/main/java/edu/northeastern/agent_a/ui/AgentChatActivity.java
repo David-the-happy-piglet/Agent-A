@@ -1,16 +1,27 @@
 package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.util.Log;
+import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -19,7 +30,9 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -40,7 +53,9 @@ import edu.northeastern.agent_a.core.tools.SmsComposeTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
 import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
+import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
+
 
 public class AgentChatActivity extends AppCompatActivity {
 
@@ -50,6 +65,9 @@ public class AgentChatActivity extends AppCompatActivity {
     private EditText etInput;
     private MaterialButton btnSend;
     private TextView tvStatus;
+
+    private ImageButton btnVoice;
+
 
     private ChatAdapter adapter;
     private SessionStore sessionStore;
@@ -62,7 +80,6 @@ public class AgentChatActivity extends AppCompatActivity {
     private Plan pendingPlan;
     private String pendingRetryText;
 
-    // Single background thread for tool execution (network I/O must not run on UI thread)
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
     private final ActivityResultLauncher<String> contactsPermissionLauncher =
@@ -85,15 +102,18 @@ public class AgentChatActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_agent_chat);
-
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root), (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
-            return insets;
-        });
-
         initViews();
         initAgent();
+        View inputArea = findViewById(R.id.inputArea);
+        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
+
+            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
+
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         addAssistant(getString(R.string.welcome_message));
     }
@@ -103,7 +123,7 @@ public class AgentChatActivity extends AppCompatActivity {
         etInput = findViewById(R.id.etInput);
         btnSend = findViewById(R.id.btnSend);
         tvStatus = findViewById(R.id.tvStatus);
-
+        btnVoice = findViewById(R.id.btnVoice);
         sessionStore = new SessionStore();
         adapter = new ChatAdapter(sessionStore.getMessages());
         planningExecutor = Executors.newSingleThreadExecutor();
@@ -114,7 +134,7 @@ public class AgentChatActivity extends AppCompatActivity {
         rvMessages.setAdapter(adapter);
 
         btnSend.setOnClickListener(v -> onSendClicked());
-
+        btnVoice.setOnClickListener(v -> handleVoiceButtonClick());
         etInput.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 onSendClicked();
@@ -184,7 +204,8 @@ public class AgentChatActivity extends AppCompatActivity {
             return;
         }
 
-        setStatus("Planned " + plan.getActions().size() + " action(s). Awaiting confirmation…");
+        setStatus("Planned " + plan.getActions().size()
+                + " action(s). Awaiting confirmation\u2026");
 
         if (policy.requiresPreview(plan)) {
             pendingPlan = plan;
@@ -218,7 +239,6 @@ public class AgentChatActivity extends AppCompatActivity {
             try {
                 results = executor.execute(this, plan);
             } catch (Exception e) {
-                // Unexpected error from executor — restore UI and bail out
                 runOnUiThread(() -> {
                     addAssistant("Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
@@ -247,7 +267,7 @@ public class AgentChatActivity extends AppCompatActivity {
                             return;
                         case FAIL:
                         default:
-                            addAssistant(stepLabel + "Failed — " + r.displayText());
+                            addAssistant(stepLabel + "Failed \u2014 " + r.displayText());
                             break;
                     }
                 }
@@ -293,5 +313,122 @@ public class AgentChatActivity extends AppCompatActivity {
 
     private void setStatus(String text) {
         tvStatus.setText(text);
+    }
+
+    // ── Voice recognition ───────────────────────────────────────────
+
+    private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
+
+    private void checkAndRequestAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_RECORD_AUDIO_PERMISSION);
+        } else {
+            startVoiceRecognition();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Permission granted, you may speak", Toast.LENGTH_SHORT).show();
+                startVoiceRecognition();
+            } else {
+                Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private SpeechRecognizer speechRecognizer;
+    private Intent speechRecognizerIntent;
+    private boolean isListening = false;
+
+    private void handleVoiceButtonClick() {
+        if (tvStatus.getText().toString().contains("busy")) {
+            isListening = false;
+            if (speechRecognizer != null) {
+                speechRecognizer.destroy();
+                speechRecognizer = null;
+            }
+        }
+        if (!isListening) {
+            checkAndRequestAudioPermission();
+            isListening = true;
+            setStatus("Listening...");
+            btnVoice.setImageResource(android.R.drawable.ic_media_pause);
+        } else {
+            stopVoiceAction();
+        }
+    }
+
+    private void stopVoiceAction() {
+        isListening = false;
+        if (speechRecognizer != null) {
+            speechRecognizer.stopListening();
+        }
+        btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+    }
+
+    private void startVoiceRecognition() {
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+        } else {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override
+                public void onResults(Bundle results) {
+                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (matches != null && !matches.isEmpty()) {
+                        String spokenText = matches.get(0);
+                        handleUserInput(spokenText);
+                        etInput.setText("");
+                    }
+                    stopVoiceAction();
+                }
+
+                @Override
+                public void onError(int error) {
+                    stopVoiceAction();
+                    if (error == SpeechRecognizer.ERROR_CLIENT) {
+                        setStatus("Voice engine is busy. tap again.");
+                        if (speechRecognizer != null) {
+                            speechRecognizer.destroy();
+                            speechRecognizer = null;
+                        }
+                    } else if (error == 7) {
+                        setStatus("No match found. Try again.");
+                    } else {
+                        setStatus("Error: " + error + ". Tap again.");
+                    }
+                }
+
+                @Override public void onReadyForSpeech(Bundle params) {}
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float rmsdB) {}
+                @Override public void onBufferReceived(byte[] buffer) {}
+                @Override public void onEndOfSpeech() {
+                    btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
+                    setStatus("Processing...");
+                }
+                @Override public void onPartialResults(Bundle partialResults) {}
+                @Override public void onEvent(int eventType, Bundle params) {}
+            });
+        }
+
+        if (speechRecognizerIntent == null) {
+            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        }
+
+        isListening = true;
+        btnVoice.setImageResource(android.R.drawable.ic_media_pause);
+        setStatus("Listening...");
+        speechRecognizer.startListening(speechRecognizerIntent);
     }
 }
