@@ -10,8 +10,11 @@ import android.speech.SpeechRecognizer;
 import android.util.Log;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -45,43 +48,52 @@ import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
-import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
+import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
-import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.GeminiLLMClient;
+import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
-
 
 public class AgentChatActivity extends AppCompatActivity {
 
     private static final String TAG = "AgentChatActivity";
 
+    // ── LLM switcher labels (order must match buildLlmClient switch) ──────
+    private static final String LLM_MOCK   = "MockLLM";
+    private static final String LLM_GEMINI = "Gemini";
+    private static final String LLM_MINIMAX = "MiniMax";
+
+    // ── Views ─────────────────────────────────────────────────────────────
     private RecyclerView rvMessages;
     private EditText etInput;
     private MaterialButton btnSend;
     private TextView tvStatus;
-
     private ImageButton btnVoice;
+    private Spinner spinnerLlm;
 
-
+    // ── Agent components ──────────────────────────────────────────────────
     private ChatAdapter adapter;
     private SessionStore sessionStore;
     private Planner planner;
     private Executor executor;
     private Policy policy;
+    private ToolRegistry registry;
+
+    // ── Background threads ────────────────────────────────────────────────
     private ExecutorService planningExecutor;
-    private String plannerModeLabel = "Mock";
-
-    private Plan pendingPlan;
-    private String pendingRetryText;
-
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
+    // ── State ─────────────────────────────────────────────────────────────
+    private Plan pendingPlan;
+    private String pendingRetryText;
+    private boolean spinnerReady = false; // suppresses the initial onItemSelected callback
+
+    // ── Permission launcher ───────────────────────────────────────────────
     private final ActivityResultLauncher<String> contactsPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
@@ -97,35 +109,60 @@ public class AgentChatActivity extends AppCompatActivity {
                         }
                     });
 
+    // ═════════════════════════════════════════════════════════════════════
+    // Lifecycle
+    // ═════════════════════════════════════════════════════════════════════
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_agent_chat);
+
         initViews();
         initAgent();
+
+        // Fix top overlap: apply status bar height as top padding on the top bar
+        View topBar = findViewById(R.id.topBar);
+        ViewCompat.setOnApplyWindowInsetsListener(topBar, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(v.getPaddingLeft(), systemBars.top, v.getPaddingRight(), v.getPaddingBottom());
+            return insets; // pass through so inputArea also receives insets
+        });
+
         View inputArea = findViewById(R.id.inputArea);
         ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
-
+            Insets imeInsets  = insets.getInsets(WindowInsetsCompat.Type.ime());
             int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
             v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
-
             return WindowInsetsCompat.CONSUMED;
         });
 
         addAssistant(getString(R.string.welcome_message));
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (planningExecutor != null) planningExecutor.shutdownNow();
+        bgExecutor.shutdownNow();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Init
+    // ═════════════════════════════════════════════════════════════════════
+
     private void initViews() {
-        rvMessages = findViewById(R.id.rvMessages);
-        etInput = findViewById(R.id.etInput);
-        btnSend = findViewById(R.id.btnSend);
-        tvStatus = findViewById(R.id.tvStatus);
-        btnVoice = findViewById(R.id.btnVoice);
-        sessionStore = new SessionStore();
-        adapter = new ChatAdapter(sessionStore.getMessages());
+        rvMessages  = findViewById(R.id.rvMessages);
+        etInput     = findViewById(R.id.etInput);
+        btnSend     = findViewById(R.id.btnSend);
+        tvStatus    = findViewById(R.id.tvStatus);
+        btnVoice    = findViewById(R.id.btnVoice);
+        spinnerLlm  = findViewById(R.id.spinnerLlm);
+
+        sessionStore    = new SessionStore();
+        adapter         = new ChatAdapter(sessionStore.getMessages());
         planningExecutor = Executors.newSingleThreadExecutor();
 
         LinearLayoutManager lm = new LinearLayoutManager(this);
@@ -142,10 +179,12 @@ public class AgentChatActivity extends AppCompatActivity {
             }
             return false;
         });
+
+        setupLlmSpinner();
     }
 
     private void initAgent() {
-        ToolRegistry registry = new ToolRegistry();
+        registry = new ToolRegistry();
         registry.register(new PhoneDialTool());
         registry.register(new SmsComposeTool());
         registry.register(new MapsNavigateTool());
@@ -153,22 +192,81 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new EmailSummaryTool());
         registry.register(new NewsFeedTool());
 
-        if (hasMiniMaxKey()) {
-            planner = new Planner(new MiniMaxLLMClient(registry), registry);
-            plannerModeLabel = "MiniMax";
-            Log.i(TAG, "Planner mode: MiniMaxLLMClient");
-            addAssistant("Planner mode: MiniMax");
-            setStatus("Planner: MiniMax ready");
-        } else {
-            planner = new Planner(new MockLLMClient(), registry);
-            plannerModeLabel = "Mock";
-            Log.i(TAG, "Planner mode: MockLLMClient");
-            addAssistant("Planner mode: Mock");
-            setStatus("Planner: Mock ready");
-        }
+        // Default to MockLLM; the Spinner will trigger a switch if the user selects another
+        planner  = new Planner(new MockLLMClient(), registry);
         executor = new Executor(registry);
-        policy = new Policy();
+        policy   = new Policy();
     }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // LLM Switcher (Improvement #2)
+    // ═════════════════════════════════════════════════════════════════════
+
+    private void setupLlmSpinner() {
+        String[] options = {LLM_MOCK, LLM_GEMINI, LLM_MINIMAX};
+        ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, options);
+        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerLlm.setAdapter(spinnerAdapter);
+        spinnerLlm.setSelection(0); // default: MockLLM
+
+        spinnerLlm.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (!spinnerReady) {
+                    // Skip the initial callback fired when the Spinner is first attached
+                    spinnerReady = true;
+                    return;
+                }
+                String selected = options[position];
+                switchLlm(selected);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+
+    /**
+     * Hot-swaps the LLM backend inside Planner without restarting the Activity.
+     * Called on the main thread from the Spinner callback.
+     */
+    private void switchLlm(String label) {
+        switch (label) {
+            case LLM_GEMINI:
+                String geminiKey = BuildConfig.GEMINI_API_KEY.trim();
+                if (geminiKey.isEmpty()) {
+                    addAssistant("⚠️ Gemini API key not found. Add GEMINI_API_KEY to local.properties.");
+                    spinnerLlm.setSelection(0); // revert to Mock
+                    return;
+                }
+                planner.setLlmClient(new GeminiLLMClient(geminiKey));
+                break;
+
+            case LLM_MINIMAX:
+                String miniMaxKey = BuildConfig.MINIMAX_API_KEY.trim();
+                if (miniMaxKey.isEmpty()) {
+                    addAssistant("⚠️ MiniMax API key not found. Add MINIMAX_API_KEY to local.properties.");
+                    spinnerLlm.setSelection(0); // revert to Mock
+                    return;
+                }
+                planner.setLlmClient(new MiniMaxLLMClient(registry));
+                break;
+
+            case LLM_MOCK:
+            default:
+                planner.setLlmClient(new MockLLMClient());
+                break;
+        }
+
+        addAssistant("🔄 Switched to " + label);
+        setStatus("Planner: " + label + " ready");
+        Log.i(TAG, "LLM switched to: " + label);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // User input handling
+    // ═════════════════════════════════════════════════════════════════════
 
     private void onSendClicked() {
         String text = etInput.getText().toString().trim();
@@ -180,7 +278,8 @@ public class AgentChatActivity extends AppCompatActivity {
     private void handleUserInput(String text) {
         addUser(text);
         setInputEnabled(false);
-        setStatus("Planner: " + plannerModeLabel + " planning...");
+        String currentLlm = (String) spinnerLlm.getSelectedItem();
+        setStatus("Planner: " + currentLlm + " planning...");
 
         planningExecutor.execute(() -> {
             try {
@@ -204,8 +303,7 @@ public class AgentChatActivity extends AppCompatActivity {
             return;
         }
 
-        setStatus("Planned " + plan.getActions().size()
-                + " action(s). Awaiting confirmation\u2026");
+        setStatus("Planned " + plan.getActions().size() + " action(s). Awaiting confirmation…");
 
         if (policy.requiresPreview(plan)) {
             pendingPlan = plan;
@@ -230,8 +328,13 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // Plan execution with step-by-step feedback (Improvement #1)
+    // ═════════════════════════════════════════════════════════════════════
+
     private void executePlan(Plan plan, String originalUserText) {
-        setStatus("Executing actions...");
+        int totalSteps = plan.getActions().size();
+        setStatus("Executing… Step 1/" + totalSteps);
         setInputEnabled(false);
 
         bgExecutor.execute(() -> {
@@ -240,7 +343,7 @@ public class AgentChatActivity extends AppCompatActivity {
                 results = executor.execute(this, plan);
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    addAssistant("Error: " + e.getMessage());
+                    addAssistant("❌ Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
                     pendingPlan = null;
                     setInputEnabled(true);
@@ -248,53 +351,56 @@ public class AgentChatActivity extends AppCompatActivity {
                 return;
             }
 
-            runOnUiThread(() -> {
-                for (int i = 0; i < results.size(); i++) {
-                    ToolResult r = results.get(i);
-                    String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
+            // Deliver each step result individually back on the main thread,
+            // updating the status bar as we go so the user sees live progress.
+            for (int i = 0; i < results.size(); i++) {
+                final int stepIndex  = i;
+                final ToolResult r   = results.get(i);
+                final String stepLabel = "Step " + (stepIndex + 1) + "/" + totalSteps + ": ";
+
+                runOnUiThread(() -> {
+                    // Update progress in the status bar for every completed step
+                    int nextStep = stepIndex + 2; // "next" step number (1-indexed)
+                    if (nextStep <= totalSteps) {
+                        setStatus("Executing… Step " + nextStep + "/" + totalSteps);
+                    } else {
+                        setStatus(getString(R.string.status_ready));
+                    }
 
                     switch (r.getStatus()) {
                         case SUCCESS:
-                            addAssistant(stepLabel + r.displayText());
+                            addAssistant("✅ " + stepLabel + r.displayText());
                             break;
+
                         case NEED_PERMISSION:
-                            addAssistant(stepLabel + r.displayText());
+                            addAssistant("🔑 " + stepLabel + r.displayText());
                             pendingRetryText = originalUserText;
                             contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
                             setStatus(getString(R.string.status_ready));
                             pendingPlan = null;
                             setInputEnabled(true);
+                            // Return early — permission flow will retry the whole input
                             return;
+
                         case FAIL:
                         default:
-                            addAssistant(stepLabel + "Failed \u2014 " + r.displayText());
+                            addAssistant("❌ " + stepLabel + "Failed — " + r.displayText());
                             break;
                     }
-                }
-                setStatus(getString(R.string.status_ready));
-                pendingPlan = null;
-                setInputEnabled(true);
-            });
+
+                    // After the last step, re-enable input
+                    if (stepIndex == results.size() - 1) {
+                        pendingPlan = null;
+                        setInputEnabled(true);
+                    }
+                });
+            }
         });
     }
 
-    private boolean hasMiniMaxKey() {
-        return !BuildConfig.MINIMAX_API_KEY.trim().isEmpty();
-    }
-
-    private void setInputEnabled(boolean enabled) {
-        etInput.setEnabled(enabled);
-        btnSend.setEnabled(enabled);
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (planningExecutor != null) {
-            planningExecutor.shutdownNow();
-        }
-        bgExecutor.shutdownNow();
-    }
+    // ═════════════════════════════════════════════════════════════════════
+    // UI helpers
+    // ═════════════════════════════════════════════════════════════════════
 
     private void addUser(String text) {
         sessionStore.addMessage(new Message(Message.Role.USER, text));
@@ -315,34 +421,16 @@ public class AgentChatActivity extends AppCompatActivity {
         tvStatus.setText(text);
     }
 
-    // ── Voice recognition ───────────────────────────────────────────
+    private void setInputEnabled(boolean enabled) {
+        etInput.setEnabled(enabled);
+        btnSend.setEnabled(enabled);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Voice recognition
+    // ═════════════════════════════════════════════════════════════════════
 
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
-
-    private void checkAndRequestAudioPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.RECORD_AUDIO},
-                    REQUEST_RECORD_AUDIO_PERMISSION);
-        } else {
-            startVoiceRecognition();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Permission granted, you may speak", Toast.LENGTH_SHORT).show();
-                startVoiceRecognition();
-            } else {
-                Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
-            }
-        }
-    }
-
     private SpeechRecognizer speechRecognizer;
     private Intent speechRecognizerIntent;
     private boolean isListening = false;
@@ -365,11 +453,34 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
+    private void checkAndRequestAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_RECORD_AUDIO_PERMISSION);
+        } else {
+            startVoiceRecognition();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Permission granted, you may speak", Toast.LENGTH_SHORT).show();
+                startVoiceRecognition();
+            } else {
+                Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
     private void stopVoiceAction() {
         isListening = false;
-        if (speechRecognizer != null) {
-            speechRecognizer.stopListening();
-        }
+        if (speechRecognizer != null) speechRecognizer.stopListening();
         btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
     }
 
@@ -381,10 +492,10 @@ public class AgentChatActivity extends AppCompatActivity {
             speechRecognizer.setRecognitionListener(new RecognitionListener() {
                 @Override
                 public void onResults(Bundle results) {
-                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    ArrayList<String> matches =
+                            results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches != null && !matches.isEmpty()) {
-                        String spokenText = matches.get(0);
-                        handleUserInput(spokenText);
+                        handleUserInput(matches.get(0));
                         etInput.setText("");
                     }
                     stopVoiceAction();
@@ -394,7 +505,7 @@ public class AgentChatActivity extends AppCompatActivity {
                 public void onError(int error) {
                     stopVoiceAction();
                     if (error == SpeechRecognizer.ERROR_CLIENT) {
-                        setStatus("Voice engine is busy. tap again.");
+                        setStatus("Voice engine is busy. Tap again.");
                         if (speechRecognizer != null) {
                             speechRecognizer.destroy();
                             speechRecognizer = null;
@@ -421,7 +532,8 @@ public class AgentChatActivity extends AppCompatActivity {
 
         if (speechRecognizerIntent == null) {
             speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
             speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         }

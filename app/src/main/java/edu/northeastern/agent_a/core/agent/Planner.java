@@ -12,7 +12,8 @@ public class Planner {
 
     private static final String TAG = "Planner";
 
-    private final LLMClient llmClient;
+    // Removed `final` to allow hot-swapping the LLM backend at runtime
+    private LLMClient llmClient;
     private final PromptBuilder promptBuilder;
     private final ToolRegistry registry;
 
@@ -20,6 +21,11 @@ public class Planner {
         this.llmClient = llmClient;
         this.promptBuilder = new PromptBuilder();
         this.registry = registry;
+    }
+
+    /** Replaces the active LLM backend without restarting the Activity. */
+    public void setLlmClient(LLMClient llmClient) {
+        this.llmClient = llmClient;
     }
 
     /**

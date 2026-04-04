@@ -8,19 +8,40 @@
     android:background="@color/chat_background"
     tools:context="edu.northeastern.agent_a.ui.AgentChatActivity">
 
-    <TextView
-        android:id="@+id/tvStatus"
+    <!-- Top bar: status text + LLM switcher Spinner side by side -->
+    <LinearLayout
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_alignParentTop="true"
         android:background="@color/status_bg"
-        android:gravity="center"
-        android:paddingVertical="6dp"
-        android:paddingHorizontal="16dp"
-        android:text="@string/status_ready"
-        android:textColor="@color/status_text"
-        android:textSize="13sp" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp">
 
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="start|center_vertical"
+            android:paddingVertical="2dp"
+            android:text="@string/status_ready"
+            android:textColor="@color/status_text"
+            android:textSize="13sp" />
+
+        <!-- LLM switcher: compact Spinner on the right side of the status bar -->
+        <Spinner
+            android:id="@+id/spinnerLlm"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:minWidth="100dp" />
+
+    </LinearLayout>
+
+    <!-- Input area pinned to bottom -->
     <LinearLayout
         android:id="@+id/inputArea"
         android:layout_width="match_parent"
@@ -62,13 +83,15 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:text="@string/btn_send" />
+
     </LinearLayout>
 
+    <!-- Message list fills remaining space between top bar and input area -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvMessages"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_below="@id/tvStatus"
+        android:layout_below="@id/topBar"
         android:layout_above="@id/inputArea"
         android:clipToPadding="false"
         android:padding="8dp"
