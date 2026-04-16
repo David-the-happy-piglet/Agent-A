@@ -17,7 +17,7 @@ public class PromptBuilder {
     private static final String SYSTEM_INSTRUCTIONS =
             "You are an AI agent running on an Android phone.\n"
                     + "If the user's request can be handled by one or more of the tools listed below, plan it using ONLY those tools.\n"
-                    + "This includes calling, texting, navigation, email summary, and news fetching.\n"
+                    + "This includes calling, texting, navigation, email summary, news fetching, weather lookup, Spotify control, media sharing, and app capability checks.\n"
                     + "If the user is chatting or asking a general question that does not need a tool, answer conversationally and use no tools.\n"
                     + "Return STRICT JSON only with this shape:\n"
                     + "  {\"message\":\"<short assistant reply>\",\"steps\":[{\"tool\":\"<tool_name>\",\"args\":{\"<key>\":\"<value>\"}}]}\n"

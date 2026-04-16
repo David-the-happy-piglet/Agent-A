@@ -35,12 +35,17 @@ public class MockLLMClient implements LLMClient {
                     + "\u2022 Send a text message (SMS)\n"
                     + "\u2022 Navigate to a destination\n"
                     + "\u2022 Check email inbox summary\n"
+                    + "\u2022 Search/play/pause Spotify\n"
+                    + "\u2022 Share the latest photo or video from the phone\n"
+                    + "\u2022 Check weather\n"
+                    + "\u2022 List installed apps or check whether a command can run\n"
                     + "\u2022 Fetch news — supported categories:\n"
                     + "    general \u00b7 tech \u00b7 ai \u00b7 finance \u00b7 politics\n"
                     + "    crypto \u00b7 science \u00b7 security \u00b7 startups\n"
                     + "    energy \u00b7 asia \u00b7 middleeast\n\n"
-                    + "Try: \"News today\", \"AI news\", \"Crypto headlines\", "
-                    + "\"Asia news\", or \"Startup funding news\".";
+                    + "Try: \"News today\", \"Play Taylor Swift on Spotify\", "
+                    + "\"Send my latest photo to John\", \"Weather in Boston\", "
+                    + "or \"Can this phone run Spotify commands?\".";
 
     @Override
     public Plan call(LLMRequest request) {
@@ -54,6 +59,18 @@ public class MockLLMClient implements LLMClient {
 
         if (matchesAny(lower, "call", "dial", "\u62e8\u6253", "\u6253\u7535\u8bdd")) {
             return planCall(userText);
+        }
+        if (isMediaShareRequest(lower)) {
+            return planMediaShare(userText);
+        }
+        if (isSpotifyRequest(lower)) {
+            return planSpotify(userText);
+        }
+        if (matchesAny(lower, "weather", "forecast", "\u5929\u6c14")) {
+            return planWeather(userText);
+        }
+        if (isAppCapabilityRequest(lower)) {
+            return planAppCapability(userText);
         }
         if (matchesAny(lower, "text ", "sms ", "send text", "send sms",
                 "\u77ed\u4fe1", "\u53d1\u77ed\u4fe1", "message ")) {
@@ -70,7 +87,7 @@ public class MockLLMClient implements LLMClient {
         }
         if (matchesAny(lower, "email", "\u90ae\u4ef6", "inbox",
                 "\u6536\u4ef6\u7bb1", "mail")) {
-            return planEmail();
+            return planEmail(userText);
         }
         if (matchesAny(lower, "news", "headlines", "latest news", "what's new",
                 "\u65b0\u95fb", "\u5934\u6761", "\u79d1\u6280\u65b0\u95fb",
@@ -140,11 +157,16 @@ public class MockLLMClient implements LLMClient {
                 "Where would you like to navigate? Please provide a destination.");
     }
 
-    private Plan planEmail() {
+    private Plan planEmail(String userText) {
+        String lower = userText.toLowerCase();
+        String mode = matchesAny(lower, "list", "today", "received today",
+                "\u5217\u8868", "\u4eca\u5929", "\u4eca\u65e5")
+                ? "today_list"
+                : "summary";
         return new Plan(
-                stepsOf(step("email.summary", argsOf("mode", "inbox"),
-                        RiskLevel.LOW, "email.summary(mode=\"inbox\")")),
-                "Here's your email summary:");
+                stepsOf(step("email.summary", argsOf("mode", mode),
+                        RiskLevel.LOW, "email.summary(mode=\"" + mode + "\")")),
+                "I'll check Gmail email notifications:");
     }
 
     private Plan planNews(String userText) {
@@ -193,6 +215,106 @@ public class MockLLMClient implements LLMClient {
                 "Here are the latest " + category + " headlines:");
     }
 
+    private Plan planSpotify(String userText) {
+        String lower = userText.toLowerCase();
+        String action = "search";
+        if (matchesAny(lower, "pause", "stop", "\u6682\u505c", "\u505c\u6b62")) {
+            action = "pause";
+        } else if (matchesAny(lower, "next", "\u4e0b\u4e00\u9996")) {
+            action = "next";
+        } else if (matchesAny(lower, "previous", "last song", "\u4e0a\u4e00\u9996")) {
+            action = "previous";
+        } else if (matchesAny(lower, "play", "\u64ad\u653e")) {
+            action = "play";
+        } else if (matchesAny(lower, "search", "find", "\u641c\u7d22", "\u68c0\u7d22")) {
+            action = "search";
+        }
+
+        String query = extractAfterKeywords(userText,
+                "play", "search spotify for", "search", "find", "spotify",
+                "\u64ad\u653e", "\u641c\u7d22", "\u68c0\u7d22");
+        if (query != null) {
+            query = query.replaceFirst("(?i)^(music|song|for|on spotify|in spotify)\\s+", "").trim();
+        }
+
+        Map<String, String> args = new HashMap<>();
+        args.put("action", action);
+        if (query != null && !query.isEmpty()
+                && !matchesAny(action, "pause", "next", "previous")) {
+            args.put("query", query);
+        }
+
+        return new Plan(
+                stepsOf(step("spotify.control", args, RiskLevel.MEDIUM,
+                        "spotify.control(action=\"" + action + "\""
+                                + (args.containsKey("query") ? ", query=\"" + args.get("query") + "\"" : "")
+                                + ")")),
+                "I'll control Spotify:");
+    }
+
+    private Plan planWeather(String userText) {
+        String location = extractAfterKeywords(userText,
+                "weather in", "weather for", "forecast in", "forecast for",
+                "\u5929\u6c14\u5728", "\u5929\u6c14");
+        if (location == null) {
+            location = userText
+                    .replaceAll("(?i)weather|forecast|how is the weather|what is the weather like", "")
+                    .replace("\u5929\u6c14\u5982\u4f55", "")
+                    .replace("\u5929\u6c14", "")
+                    .trim();
+        }
+
+        Map<String, String> args = new HashMap<>();
+        args.put("location", location != null ? location : "");
+        return new Plan(
+                stepsOf(step("weather.lookup", args, RiskLevel.LOW,
+                        "weather.lookup(location=\"" + args.get("location") + "\")")),
+                "I'll check the weather:");
+    }
+
+    private Plan planMediaShare(String userText) {
+        String lower = userText.toLowerCase();
+        String fileType = "photo";
+        if (matchesAny(lower, "video", "\u89c6\u9891")) {
+            fileType = "video";
+        } else if (matchesAny(lower, "file", "document", "\u6587\u4ef6")) {
+            fileType = "any";
+        }
+
+        String recipient = extractAfterKeywords(userText,
+                "send to", "share with", "to", "\u53d1\u7ed9", "\u7ed9");
+        if (recipient != null) {
+            recipient = recipient
+                    .replaceFirst("(?i)^(my |the |latest |recent |photo|picture|image|video|file)\\s+", "")
+                    .trim();
+        }
+
+        List<ActionSpec> actions = new ArrayList<>();
+        if (recipient != null && !recipient.isEmpty()) {
+            actions.add(step("contacts.lookup", argsOf("name", recipient),
+                    RiskLevel.MEDIUM, "contacts.lookup(name=\"" + recipient + "\")"));
+            actions.add(step("media.share",
+                    argsOf("file_type", fileType, "recency", "latest",
+                            "contact_name", recipient, "phone", "[from_lookup]"),
+                    RiskLevel.HIGH,
+                    "media.share(file_type=\"" + fileType + "\", phone=[from_lookup])"));
+            return new Plan(actions, "I'll find the recipient, then open sharing for the latest " + fileType + ":");
+        }
+
+        actions.add(step("media.share",
+                argsOf("file_type", fileType, "recency", "latest"),
+                RiskLevel.HIGH,
+                "media.share(file_type=\"" + fileType + "\")"));
+        return new Plan(actions, "I'll find the latest " + fileType + " and open sharing:");
+    }
+
+    private Plan planAppCapability(String userText) {
+        return new Plan(
+                stepsOf(step("apps.capability", argsOf("command", userText),
+                        RiskLevel.LOW, "apps.capability(command=\"" + userText + "\")")),
+                "I'll check the installed apps and available capabilities:");
+    }
+
     // ── text parsing helpers ────────────────────────────────────────────
 
     private boolean matchesAny(String text, String... keywords) {
@@ -200,6 +322,28 @@ public class MockLLMClient implements LLMClient {
             if (text.contains(kw)) return true;
         }
         return false;
+    }
+
+    private boolean isSpotifyRequest(String lower) {
+        return matchesAny(lower, "spotify", "music", "song", "playlist",
+                "\u97f3\u4e50", "\u6b4c\u66f2", "\u64ad\u653e", "\u6682\u505c\u64ad\u653e");
+    }
+
+    private boolean isMediaShareRequest(String lower) {
+        return matchesAny(lower, "latest photo", "recent photo", "latest picture",
+                "recent picture", "latest image", "recent image", "latest video",
+                "recent video", "send my photo", "share my photo",
+                "\u6700\u8fd1\u62cd\u6444", "\u6700\u8fd1\u7684\u7167\u7247",
+                "\u7167\u7247\u53d1\u7ed9", "\u53d1\u7ed9")
+                && matchesAny(lower, "photo", "picture", "image", "video", "file",
+                "\u7167\u7247", "\u56fe\u7247", "\u89c6\u9891", "\u6587\u4ef6");
+    }
+
+    private boolean isAppCapabilityRequest(String lower) {
+        return matchesAny(lower, "installed apps", "list apps", "what apps",
+                "can this phone", "can you execute", "can i run",
+                "\u624b\u673a\u91cc\u6709", "\u5df2\u5b89\u88c5", "\u6709\u54ea\u4e9bapp",
+                "\u53ef\u4ee5\u6267\u884c", "\u80fd\u5426\u6267\u884c");
     }
 
     private String extractPhone(String text) {

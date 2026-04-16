@@ -20,6 +20,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import edu.northeastern.agent_a.BuildConfig;
 import edu.northeastern.agent_a.core.tools.ActionSpec;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.RiskLevel;
@@ -34,11 +35,7 @@ public class OpenAILLMClient implements LLMClient {
 
     private static final String TAG = "OpenAILLMClient";
 
-    // ╔═══════════════════════════════════════════════════════════════╗
-    // ║  ★★★ FILL IN YOUR MINIMAX API KEY HERE ★★★                 ║
-    // ║  Get one at https://platform.minimax.chat                   ║
-    // ╚═══════════════════════════════════════════════════════════════╝
-    private static final String API_KEY = "sk-api-6YAGoYgYvcz2mDpeFzdRtGG2fFKPl4OcJJOO3wAqRIGVTrPA6cXFeh9y4pmkYgY8t8I9f81qnEnNiJhPrxhz4rtpGKIgETCSsdvdxDDaNVC0oWZWsaFT0jk";
+    private static final String API_KEY = BuildConfig.MINIMAX_API_KEY;
 
     // ╔═══════════════════════════════════════════════════════════════╗
     // ║  MiniMax model. Options:                                    ║
@@ -53,10 +50,10 @@ public class OpenAILLMClient implements LLMClient {
 
     @Override
     public Plan call(LLMRequest request) {
-        if (API_KEY.startsWith("YOUR_")) {
+        if (API_KEY == null || API_KEY.trim().isEmpty()) {
             return new Plan(Collections.emptyList(),
                     "MiniMax API key not configured. "
-                            + "Open OpenAILLMClient.java and set API_KEY.");
+                            + "Add MINIMAX_API_KEY to local.properties.");
         }
         try {
             String responseBody = post(request);
@@ -91,7 +88,7 @@ public class OpenAILLMClient implements LLMClient {
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Authorization", "Bearer " + API_KEY);
+        conn.setRequestProperty("Authorization", "Bearer " + API_KEY.trim());
         conn.setConnectTimeout(TIMEOUT_MS);
         conn.setReadTimeout(TIMEOUT_MS);
         conn.setDoOutput(true);

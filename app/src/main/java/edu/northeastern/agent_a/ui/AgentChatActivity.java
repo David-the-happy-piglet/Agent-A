@@ -2,11 +2,14 @@ package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.text.InputType;
 import android.util.Log;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
@@ -14,6 +17,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -32,10 +36,12 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -46,15 +52,20 @@ import edu.northeastern.agent_a.core.agent.Planner;
 import edu.northeastern.agent_a.core.agent.Policy;
 import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
+import edu.northeastern.agent_a.core.tools.AppCapabilityTool;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
 import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
+import edu.northeastern.agent_a.core.tools.MediaShareTool;
 import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
+import edu.northeastern.agent_a.core.tools.SpotifyControlTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
+import edu.northeastern.agent_a.core.tools.WeatherTool;
+import edu.northeastern.agent_a.llm.ConfigurableLLMClient;
 import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
@@ -67,6 +78,13 @@ public class AgentChatActivity extends AppCompatActivity {
     private static final String LLM_MOCK   = "MockLLM";
     private static final String LLM_GEMINI = "Gemini";
     private static final String LLM_MINIMAX = "MiniMax";
+    private static final String LLM_CUSTOM = "Custom LLM";
+
+    private static final String PREFS_LLM = "custom_llm";
+    private static final String PREF_CUSTOM_NAME = "name";
+    private static final String PREF_CUSTOM_BASE_URL = "base_url";
+    private static final String PREF_CUSTOM_MODEL = "model";
+    private static final String PREF_CUSTOM_API_KEY = "api_key";
 
     // ── Views ─────────────────────────────────────────────────────────────
     private RecyclerView rvMessages;
@@ -105,6 +123,29 @@ public class AgentChatActivity extends AppCompatActivity {
                             handleUserInput(retryText);
                         } else if (!granted) {
                             addAssistant("Permission denied. Please provide the phone number directly.");
+                            setInputEnabled(true);
+                        }
+                    });
+
+    private final ActivityResultLauncher<String[]> mediaPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestMultiplePermissions(),
+                    grants -> {
+                        boolean allGranted = !grants.isEmpty();
+                        for (Boolean granted : grants.values()) {
+                            if (!Boolean.TRUE.equals(granted)) {
+                                allGranted = false;
+                                break;
+                            }
+                        }
+
+                        if (allGranted && pendingRetryText != null) {
+                            String retryText = pendingRetryText;
+                            pendingRetryText = null;
+                            addAssistant("Media permission granted. Retrying...");
+                            handleUserInput(retryText);
+                        } else if (!allGranted) {
+                            addAssistant("Media permission denied. I can't search recent photos/videos without it.");
                             setInputEnabled(true);
                         }
                     });
@@ -191,6 +232,10 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
         registry.register(new NewsFeedTool());
+        registry.register(new SpotifyControlTool());
+        registry.register(new MediaShareTool());
+        registry.register(new WeatherTool());
+        registry.register(new AppCapabilityTool());
 
         // Default to MockLLM; the Spinner will trigger a switch if the user selects another
         planner  = new Planner(new MockLLMClient(), registry);
@@ -203,7 +248,7 @@ public class AgentChatActivity extends AppCompatActivity {
     // ═════════════════════════════════════════════════════════════════════
 
     private void setupLlmSpinner() {
-        String[] options = {LLM_MOCK, LLM_GEMINI, LLM_MINIMAX};
+        String[] options = {LLM_MOCK, LLM_GEMINI, LLM_MINIMAX, LLM_CUSTOM};
         ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(
                 this, android.R.layout.simple_spinner_item, options);
         spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -253,6 +298,17 @@ public class AgentChatActivity extends AppCompatActivity {
                 planner.setLlmClient(new MiniMaxLLMClient(registry));
                 break;
 
+            case LLM_CUSTOM:
+                CustomLlmConfig config = loadCustomLlmConfig();
+                if (!config.isComplete()) {
+                    showCustomLlmDialog();
+                    return;
+                }
+                planner.setLlmClient(new ConfigurableLLMClient(
+                        registry, config.apiKey, config.baseUrl, config.model));
+                label = "Custom LLM (" + config.name + ")";
+                break;
+
             case LLM_MOCK:
             default:
                 planner.setLlmClient(new MockLLMClient());
@@ -262,6 +318,84 @@ public class AgentChatActivity extends AppCompatActivity {
         addAssistant("🔄 Switched to " + label);
         setStatus("Planner: " + label + " ready");
         Log.i(TAG, "LLM switched to: " + label);
+    }
+
+    private void showCustomLlmDialog() {
+        CustomLlmConfig existing = loadCustomLlmConfig();
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int padding = (int) (20 * getResources().getDisplayMetrics().density);
+        layout.setPadding(padding, 8, padding, 0);
+
+        EditText name = makeConfigEditText("Display name", existing.name);
+        EditText baseUrl = makeConfigEditText(
+                "Base URL, e.g. https://api.openai.com/v1/chat/completions",
+                existing.baseUrl);
+        EditText model = makeConfigEditText("Model, e.g. gpt-4o-mini", existing.model);
+        EditText apiKey = makeConfigEditText("API key", existing.apiKey);
+        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        layout.addView(name);
+        layout.addView(baseUrl);
+        layout.addView(model);
+        layout.addView(apiKey);
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Add Custom LLM")
+                .setMessage("Use any OpenAI-compatible chat completions endpoint.")
+                .setView(layout)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    CustomLlmConfig config = new CustomLlmConfig(
+                            emptyToDefault(name.getText().toString().trim(), "Custom"),
+                            baseUrl.getText().toString().trim(),
+                            model.getText().toString().trim(),
+                            apiKey.getText().toString().trim());
+                    if (!config.isComplete()) {
+                        addAssistant("Custom LLM config is incomplete. Please provide base URL, model, and API key.");
+                        spinnerLlm.setSelection(0);
+                        return;
+                    }
+                    saveCustomLlmConfig(config);
+                    planner.setLlmClient(new ConfigurableLLMClient(
+                            registry, config.apiKey, config.baseUrl, config.model));
+                    addAssistant("Switched to Custom LLM (" + config.name + ")");
+                    setStatus("Planner: Custom LLM ready");
+                })
+                .setNegativeButton(R.string.btn_cancel, (dialog, which) -> spinnerLlm.setSelection(0))
+                .show();
+    }
+
+    private EditText makeConfigEditText(String hint, String value) {
+        EditText editText = new EditText(this);
+        editText.setHint(hint);
+        editText.setSingleLine(true);
+        editText.setText(value);
+        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        return editText;
+    }
+
+    private String emptyToDefault(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private CustomLlmConfig loadCustomLlmConfig() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_LLM, MODE_PRIVATE);
+        return new CustomLlmConfig(
+                prefs.getString(PREF_CUSTOM_NAME, "Custom"),
+                prefs.getString(PREF_CUSTOM_BASE_URL, ""),
+                prefs.getString(PREF_CUSTOM_MODEL, ""),
+                prefs.getString(PREF_CUSTOM_API_KEY, ""));
+    }
+
+    private void saveCustomLlmConfig(CustomLlmConfig config) {
+        getSharedPreferences(PREFS_LLM, MODE_PRIVATE)
+                .edit()
+                .putString(PREF_CUSTOM_NAME, config.name)
+                .putString(PREF_CUSTOM_BASE_URL, config.baseUrl)
+                .putString(PREF_CUSTOM_MODEL, config.model)
+                .putString(PREF_CUSTOM_API_KEY, config.apiKey)
+                .apply();
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -375,7 +509,7 @@ public class AgentChatActivity extends AppCompatActivity {
                         case NEED_PERMISSION:
                             addAssistant("🔑 " + stepLabel + r.displayText());
                             pendingRetryText = originalUserText;
-                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+                            requestPermissionForTool(r);
                             setStatus(getString(R.string.status_ready));
                             pendingPlan = null;
                             setInputEnabled(true);
@@ -396,6 +530,33 @@ public class AgentChatActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void requestPermissionForTool(ToolResult result) {
+        Map<String, String> audit = result.getAudit();
+        String toolName = audit != null ? audit.getOrDefault("tool", "") : "";
+
+        if ("contacts.lookup".equals(toolName)) {
+            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+            return;
+        }
+
+        if ("media.share".equals(toolName)) {
+            mediaPermissionLauncher.launch(mediaPermissions());
+            return;
+        }
+
+        addAssistant("Permission is required, but no permission handler is registered for " + toolName + ".");
+    }
+
+    private String[] mediaPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return new String[]{
+                    Manifest.permission.READ_MEDIA_IMAGES,
+                    Manifest.permission.READ_MEDIA_VIDEO
+            };
+        }
+        return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -542,5 +703,23 @@ public class AgentChatActivity extends AppCompatActivity {
         btnVoice.setImageResource(android.R.drawable.ic_media_pause);
         setStatus("Listening...");
         speechRecognizer.startListening(speechRecognizerIntent);
+    }
+
+    private static class CustomLlmConfig {
+        final String name;
+        final String baseUrl;
+        final String model;
+        final String apiKey;
+
+        CustomLlmConfig(String name, String baseUrl, String model, String apiKey) {
+            this.name = name != null ? name.trim() : "Custom";
+            this.baseUrl = baseUrl != null ? baseUrl.trim() : "";
+            this.model = model != null ? model.trim() : "";
+            this.apiKey = apiKey != null ? apiKey.trim() : "";
+        }
+
+        boolean isComplete() {
+            return !baseUrl.isEmpty() && !model.isEmpty() && !apiKey.isEmpty();
+        }
     }
 }
