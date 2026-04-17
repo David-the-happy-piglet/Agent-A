@@ -2,8 +2,6 @@ package edu.northeastern.agent_a.llm;
 
 import android.util.Log;
 
-
-
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -23,27 +21,46 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
+/**
+ * GeminiLLMClient sends the prompt to Google Gemini and parses the JSON response into a Plan.
+ * Uses OkHttp for HTTP requests.
+ * The API key is passed in the request header (x-goog-api-key), not in the URL,
+ * which is safer because header values do not appear in server logs.
+ */
 public class GeminiLLMClient implements LLMClient {
 
     private static final String TAG = "GeminiLLMClient";
     private static final String API_URL =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
     private static final MediaType JSON = MediaType.get("application/json");
 
     private final String apiKey;
     private final OkHttpClient http = new OkHttpClient();
 
+    /**
+     * @param apiKey the Gemini API key, read from BuildConfig.GEMINI_API_KEY
+     */
     public GeminiLLMClient(String apiKey) {
         this.apiKey = apiKey;
     }
 
+    // ── Entry point ───────────────────────────────────────────────────────
+
+    /**
+     * Sends the request to Gemini with up to 3 retries.
+     * If the server returns 429 (rate limit), callOnce() returns null
+     * and we wait before the next attempt (2s, 4s, 6s).
+     * Any other failure returns an error Plan immediately.
+     *
+     * @param request contains the system prompt and the user query
+     * @return a Plan with actions, or an error Plan with no actions
+     */
     @Override
     public Plan call(LLMRequest request) {
         for (int attempt = 1; attempt <= 3; attempt++) {
             try {
                 Plan result = callOnce(request, attempt);
                 if (result != null) return result;
-                // null means 429 — wait and retry
                 Thread.sleep(2000L * attempt);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -56,23 +73,31 @@ public class GeminiLLMClient implements LLMClient {
         return errorPlan("Service busy. Please try again in a moment.");
     }
 
+    // ── HTTP request ──────────────────────────────────────────────────────
+
     /**
-     * Makes a single HTTP call to Gemini.
-     * Returns null if the server returned 429 (caller should retry).
-     * Returns a Plan (possibly an error plan) for all other outcomes.
+     * Makes one HTTP call to Gemini.
+     * Returns null if the server responded with 429 so call() can retry.
+     * Returns a Plan (or error Plan) for all other responses.
+     *
+     * Request body structure:
+     *   system_instruction  -- tool specs and instructions for the LLM
+     *   contents            -- the user's message
+     *   generationConfig    -- forces JSON output via response_mime_type
+     *
+     * @param request the prompt to send
+     * @param attempt the current attempt number, used only for logging
+     * @return a Plan, or null if the server rate-limited the request
      */
     private Plan callOnce(LLMRequest request, int attempt) throws Exception {
-        // Build Gemini request body
         JSONObject body = new JSONObject();
 
-        // System instruction
         JSONObject systemInstruction = new JSONObject();
         JSONObject sysPart = new JSONObject();
         sysPart.put("text", request.getSystemPrompt());
         systemInstruction.put("parts", new JSONArray().put(sysPart));
         body.put("system_instruction", systemInstruction);
 
-        // User message
         JSONObject userPart = new JSONObject();
         userPart.put("text", request.getUserQuery());
         JSONObject userContent = new JSONObject();
@@ -80,12 +105,10 @@ public class GeminiLLMClient implements LLMClient {
         userContent.put("parts", new JSONArray().put(userPart));
         body.put("contents", new JSONArray().put(userContent));
 
-        // Force JSON output
+        // Force JSON output so parsePlan() always receives valid JSON
         JSONObject genConfig = new JSONObject();
         genConfig.put("response_mime_type", "application/json");
         body.put("generationConfig", genConfig);
-
-        String fullUrl = API_URL + apiKey;
 
         Request httpRequest = new Request.Builder()
                 .url(API_URL)
@@ -95,19 +118,15 @@ public class GeminiLLMClient implements LLMClient {
 
         try (Response response = http.newCall(httpRequest).execute()) {
             if (response.code() == 429) {
-                Log.w(TAG, "Attempt " + attempt + ": 429 rate limited, will retry...");
-                return null; // signal retry
+                Log.w(TAG, "Attempt " + attempt + ": rate limited, will retry...");
+                return null;
             }
             if (response.code() == 403) {
                 return errorPlan("API key invalid or not yet activated.");
             }
             if (!response.isSuccessful() || response.body() == null) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
-                Log.e(TAG, "Attempt " + attempt + " HTTP error: " + response.code() + " body: " + errorBody);
-                if (response.code() == 429) return null;
-                if (response.code() == 403) {
-                    return errorPlan("API key invalid or not yet activated.");
-                }
+                Log.e(TAG, "HTTP error: " + response.code() + " body: " + errorBody);
                 return errorPlan("Network error: " + response.code());
             }
 
@@ -119,6 +138,16 @@ public class GeminiLLMClient implements LLMClient {
 
     // ── Response parsing ──────────────────────────────────────────────────
 
+    /**
+     * Parses the Gemini JSON response into a Plan.
+     * Gemini can return two formats:
+     *   Format A (bare array):  [{tool, args}, ...]
+     *   Format B (object):      { "message": "...", "steps": [{tool, args}, ...] }
+     * Both are handled. Each step becomes one ActionSpec in the Plan.
+     *
+     * @param responseText the raw JSON string from Gemini
+     * @return a Plan with the parsed actions, or an error Plan if parsing fails
+     */
     private Plan parsePlan(String responseText) {
         try {
             JSONObject root = new JSONObject(responseText);
@@ -133,14 +162,12 @@ public class GeminiLLMClient implements LLMClient {
 
             Log.d(TAG, "Gemini content: " + content);
 
-            // Gemini may return a bare array or a {"steps":[], "message":""} object
             String assistantMessage = "Done.";
             JSONArray steps;
+
             if (content.trim().startsWith("[")) {
-                // Bare array format: [{...}, {...}]
                 steps = new JSONArray(content);
             } else {
-                // Object format: {"steps": [...], "message": "..."}
                 JSONObject parsed = new JSONObject(content);
                 assistantMessage = parsed.optString("message", "Done.");
                 steps = parsed.optJSONArray("steps");
@@ -177,6 +204,14 @@ public class GeminiLLMClient implements LLMClient {
         }
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Returns a Plan with no actions and an error message shown to the user.
+     *
+     * @param message the error text to display in the chat
+     * @return an empty Plan carrying the error message
+     */
     private Plan errorPlan(String message) {
         return new Plan(Collections.emptyList(), message);
     }

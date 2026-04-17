@@ -7,7 +7,17 @@ import android.net.Uri;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/**
+ * PhoneDialTool opens the system phone dialer with a given number pre-filled.
+ * It does NOT call directly — the user still has to tap the call button.
+ * Because of this, no CALL_PHONE permission is needed.
+ *
+ * ACTION_DIAL = open dialer only, no permission needed.
+ * ACTION_CALL = call immediately, requires CALL_PHONE permission.
+ */
 public class PhoneDialTool implements Tool {
+
+    // ── Tool identity ─────────────────────────────────────────────────────
 
     @Override
     public String name() { return "phone.dial"; }
@@ -24,6 +34,17 @@ public class PhoneDialTool implements Tool {
                 params, RiskLevel.LOW);
     }
 
+    // ── Execution ─────────────────────────────────────────────────────────
+
+    /**
+     * Opens the system dialer with the given phone number pre-filled.
+     * FLAG_ACTIVITY_NEW_TASK is required because the tool runs inside Executor,
+     * which is not an Activity context.
+     *
+     * @param context the application context used to start the dialer Activity
+     * @param args    must contain key "phone" with the number to dial
+     * @return ToolResult.success() if the dialer opened, ToolResult.fail() otherwise
+     */
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {
         String phone = args.get("phone");
