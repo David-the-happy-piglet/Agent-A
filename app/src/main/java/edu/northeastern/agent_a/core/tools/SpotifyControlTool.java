@@ -51,32 +51,15 @@ public class SpotifyControlTool implements Tool {
                 }
 
                 SpotifyWebApiClient webApi = new SpotifyWebApiClient(context, authManager);
-                switch (action) {
-                    case "play":
-                        if (!uri.isEmpty()) {
-                            return ToolResult.success(webApi.playUri(uri));
-                        }
-                        if (!query.isEmpty()) {
-                            return ToolResult.success(webApi.playQuery(query));
-                        }
-                        return ToolResult.success(webApi.resume());
-
-                    case "pause":
-                    case "stop":
-                        return ToolResult.success(webApi.pause());
-
-                    case "next":
-                        return ToolResult.success(webApi.next());
-
-                    case "previous":
-                        return ToolResult.success(webApi.previous());
-
-                    case "toggle":
-                    case "play_pause":
-                        return ToolResult.success("Spotify Web API does not expose a true toggle. Say \"pause Spotify\" or \"play Spotify\".");
-
-                    default:
-                        return ToolResult.fail("Unsupported Spotify action: " + action);
+                try {
+                    return ToolResult.success(executeWebApiAction(webApi, action, query, uri));
+                } catch (SpotifyWebApiClient.NoSpotifyDeviceException e) {
+                    if (isSpotifyInstalled(context)) {
+                        openSpotifyHome(context);
+                        waitForSpotifyToOpen(3000);
+                        return ToolResult.success(executeWebApiAction(webApi, action, query, uri));
+                    }
+                    throw e;
                 }
             } catch (Exception e) {
                 return ToolResult.fail("Spotify Web API failed: " + e.getMessage());
@@ -159,6 +142,39 @@ public class SpotifyControlTool implements Tool {
         return ToolResult.success("Opened Spotify.");
     }
 
+    private String executeWebApiAction(SpotifyWebApiClient webApi,
+                                       String action,
+                                       String query,
+                                       String uri) throws Exception {
+        switch (action) {
+            case "play":
+                if (!uri.isEmpty()) {
+                    return webApi.playUri(uri);
+                }
+                if (!query.isEmpty()) {
+                    return webApi.playQuery(query);
+                }
+                return webApi.resume();
+
+            case "pause":
+            case "stop":
+                return webApi.pause();
+
+            case "next":
+                return webApi.next();
+
+            case "previous":
+                return webApi.previous();
+
+            case "toggle":
+            case "play_pause":
+                return "Spotify Web API does not expose a true toggle. Say \"pause Spotify\" or \"play Spotify\".";
+
+            default:
+                throw new IllegalArgumentException("Unsupported Spotify action: " + action);
+        }
+    }
+
     private void openSpotifyUri(Context context, Uri uri) {
         Intent intent = new Intent(Intent.ACTION_VIEW, uri);
         intent.setPackage(SPOTIFY_PACKAGE);
@@ -180,8 +196,12 @@ public class SpotifyControlTool implements Tool {
     }
 
     private void waitForSpotifyToOpen() {
+        waitForSpotifyToOpen(700);
+    }
+
+    private void waitForSpotifyToOpen(long delayMs) {
         try {
-            Thread.sleep(700);
+            Thread.sleep(delayMs);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

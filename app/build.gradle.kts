@@ -29,6 +29,7 @@ android {
         val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
         val spotifyClientId = localProperties.getProperty("SPOTIFY_CLIENT_ID", "")
         val spotifyRedirectUri = localProperties.getProperty("SPOTIFY_REDIRECT_URI", "agenta://spotify-auth")
+        val googleClientId = localProperties.getProperty("GOOGLE_CLIENT_ID", "")
 
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
         buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
@@ -36,6 +37,7 @@ android {
         buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
         buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"$spotifyClientId\"")
         buildConfigField("String", "SPOTIFY_REDIRECT_URI", "\"$spotifyRedirectUri\"")
+        buildConfigField("String", "GOOGLE_CLIENT_ID", "\"$googleClientId\"")
     }
 
     buildFeatures {
@@ -56,6 +58,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+        }
+    }
 }
 
 dependencies {
@@ -63,7 +72,15 @@ dependencies {
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.constraintlayout)
+    implementation(libs.biometric)
+    implementation(libs.glide)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Google Services & APIs
+    implementation(libs.play.services.auth)
+    implementation(libs.google.api.client.android)
+    implementation(libs.google.api.services.gmail)
+    implementation(libs.google.http.client.gson)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

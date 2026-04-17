@@ -8,6 +8,12 @@ material = "1.13.0"
 activity = "1.12.2"
 constraintlayout = "2.2.1"
 firebaseCrashlyticsBuildtools = "3.0.6"
+biometric = "1.1.0"
+glide = "4.16.0"
+playServicesAuth = "21.3.0"
+googleApiClientAndroid = "2.9.0"
+googleApiServicesGmail = "v1-rev20231023-2.0.0"
+googleHttpClientGson = "1.44.1"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -18,7 +24,12 @@ material = { group = "com.google.android.material", name = "material", version.r
 activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
 constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 firebase-crashlytics-buildtools = { group = "com.google.firebase", name = "firebase-crashlytics-buildtools", version.ref = "firebaseCrashlyticsBuildtools" }
+biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
+play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
+google-api-client-android = { group = "com.google.api-client", name = "google-api-client-android", version.ref = "googleApiClientAndroid" }
+google-api-services-gmail = { group = "com.google.apis", name = "google-api-services-gmail", version.ref = "googleApiServicesGmail" }
+google-http-client-gson = { group = "com.google.http-client", name = "google-http-client-gson", version.ref = "googleHttpClientGson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-

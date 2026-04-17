@@ -32,7 +32,7 @@ public class SpotifyWebApiClient {
             return "No Spotify track found for \"" + query + "\".";
         }
 
-        putJson("/me/player/play", new JSONObject()
+        putJson(playPathForBestDevice(), new JSONObject()
                 .put("uris", new JSONArray().put(track.uri))
                 .toString());
         return "Playing " + track.name + " by " + track.artist + ".";
@@ -46,27 +46,27 @@ public class SpotifyWebApiClient {
             body.put("context_uri", uri);
         }
 
-        putJson("/me/player/play", body.toString());
+        putJson(playPathForBestDevice(), body.toString());
         return "Started Spotify playback for " + uri + ".";
     }
 
     public String resume() throws Exception {
-        putJson("/me/player/play", "{}");
+        putJson(playPathForBestDevice(), "{}");
         return "Resumed Spotify playback.";
     }
 
     public String pause() throws Exception {
-        request("PUT", "/me/player/pause", null);
+        request("PUT", devicePath("/me/player/pause"), null);
         return "Paused Spotify playback.";
     }
 
     public String next() throws Exception {
-        request("POST", "/me/player/next", null);
+        request("POST", devicePath("/me/player/next"), null);
         return "Skipped to the next Spotify track.";
     }
 
     public String previous() throws Exception {
-        request("POST", "/me/player/previous", null);
+        request("POST", devicePath("/me/player/previous"), null);
         return "Went back to the previous Spotify track.";
     }
 
@@ -98,6 +98,59 @@ public class SpotifyWebApiClient {
 
     private void putJson(String path, String body) throws Exception {
         request("PUT", path, body);
+    }
+
+    private String playPathForBestDevice() throws Exception {
+        String deviceId = ensurePlaybackDevice();
+        return "/me/player/play?device_id=" + Uri.encode(deviceId);
+    }
+
+    private String devicePath(String basePath) throws Exception {
+        String deviceId = ensurePlaybackDevice();
+        return basePath + "?device_id=" + Uri.encode(deviceId);
+    }
+
+    private String ensurePlaybackDevice() throws Exception {
+        JSONObject response = new JSONObject(request("GET", "/me/player/devices", null));
+        JSONArray devices = response.optJSONArray("devices");
+        if (devices == null || devices.length() == 0) {
+            throw new NoSpotifyDeviceException(
+                    "Spotify has no visible playback device. Open Spotify on this phone or another Spotify Connect device, wait a few seconds, then try again.");
+        }
+
+        JSONObject fallback = null;
+        for (int i = 0; i < devices.length(); i++) {
+            JSONObject device = devices.getJSONObject(i);
+            if (device.optBoolean("is_restricted", false)) {
+                continue;
+            }
+            if (device.optBoolean("is_active", false)) {
+                String activeId = device.optString("id", "");
+                if (!activeId.isEmpty()) {
+                    return activeId;
+                }
+            }
+            if (fallback == null && !device.optString("id", "").isEmpty()) {
+                fallback = device;
+            }
+        }
+
+        if (fallback == null) {
+            throw new NoSpotifyDeviceException(
+                    "Spotify returned devices, but none can be controlled. Open Spotify once and try again.");
+        }
+
+        String deviceId = fallback.optString("id", "");
+        transferPlayback(deviceId);
+        return deviceId;
+    }
+
+    private void transferPlayback(String deviceId) throws Exception {
+        JSONObject body = new JSONObject()
+                .put("device_ids", new JSONArray().put(deviceId))
+                .put("play", false);
+        request("PUT", "/me/player", body.toString());
+        Thread.sleep(700);
     }
 
     private String request(String method, String path, String body) throws Exception {
@@ -149,7 +202,7 @@ public class SpotifyWebApiClient {
                 String reason = error.optString("reason", "");
                 String message = error.optString("message", "");
                 if ("NO_ACTIVE_DEVICE".equals(reason)) {
-                    return "Spotify has no active playback device. Open Spotify once or start playback on a device, then try again.";
+                    return "Spotify has no active playback device. Open Spotify once or start playback on a device, wait a few seconds, then try again.";
                 }
                 if (!message.isEmpty()) {
                     return "Spotify Web API error (" + status + "): " + message;
@@ -190,6 +243,12 @@ public class SpotifyWebApiClient {
             this.uri = uri;
             this.name = name;
             this.artist = artist;
+        }
+    }
+
+    public static class NoSpotifyDeviceException extends Exception {
+        NoSpotifyDeviceException(String message) {
+            super(message);
         }
     }
 }
