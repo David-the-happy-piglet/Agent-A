@@ -2,21 +2,23 @@ package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.text.InputType;
 import android.util.Log;
-import android.util.TypedValue;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -35,10 +37,12 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,16 +53,21 @@ import edu.northeastern.agent_a.core.agent.Planner;
 import edu.northeastern.agent_a.core.agent.Policy;
 import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
+import edu.northeastern.agent_a.core.tools.AppCapabilityTool;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
-import edu.northeastern.agent_a.core.tools.EarthPhotoTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
-import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
+import edu.northeastern.agent_a.core.tools.MediaShareTool;
+import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
+import edu.northeastern.agent_a.core.tools.SpotifyAuthManager;
+import edu.northeastern.agent_a.core.tools.SpotifyControlTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
+import edu.northeastern.agent_a.core.tools.WeatherTool;
+import edu.northeastern.agent_a.llm.ConfigurableLLMClient;
 import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
@@ -75,16 +84,20 @@ public class AgentChatActivity extends AppCompatActivity {
 
     private static final String TAG = "AgentChatActivity";
 
-    // How long the app can stay in the background before requiring auth again
-    private static final long BACKGROUND_TIMEOUT_MS = 30000;
+    // ── LLM switcher labels ───────────────────────────────────────────────
 
-    // Set to false to skip biometric auth when testing on an emulator
-    private static final boolean ENABLE_SECURITY = true;
+    // Order must match the array passed to the Spinner in setupLlmSpinner()
+    private static final String LLM_MOCK    = "MockLLM";
+    private static final String LLM_GEMINI  = "Gemini";
+    private static final String LLM_MINIMAX = "MiniMax";
+    private static final String LLM_CUSTOM  = "Custom LLM";
 
-    // MiniMax key hardcoded here because local.properties was blocked on this machine
-    private static final String MINIMAX_KEY   = "sk-api-6YAGoYgYvcz2mDpeFzdRtGG2fFKPl4OcJJOO3wAqRIGVTrPA6cXFeh9y4pmkYgY8t8I9f81qnEnNiJhPrxhz4rtpGKIgETCSsdvdxDDaNVC0oWZWsaFT0jk";
-    private static final String MINIMAX_URL   = "https://api.minimax.io/v1/text/chatcompletion_v2";
-    private static final String MINIMAX_MODEL = "M2-her";
+    // SharedPreferences keys for saving custom LLM config across sessions
+    private static final String PREFS_LLM          = "custom_llm";
+    private static final String PREF_CUSTOM_NAME    = "name";
+    private static final String PREF_CUSTOM_BASE_URL = "base_url";
+    private static final String PREF_CUSTOM_MODEL   = "model";
+    private static final String PREF_CUSTOM_API_KEY = "api_key";
 
     // ── Views ─────────────────────────────────────────────────────────────
 
@@ -94,7 +107,6 @@ public class AgentChatActivity extends AppCompatActivity {
     private TextView tvStatus;
     private ImageButton btnVoice;
     private Spinner spinnerLlm; // (Improvement #2) lets the user pick the LLM backend
-    private View overlay;       // black overlay shown while biometric auth is pending
 
     // ── Agent components ──────────────────────────────────────────────────
 
@@ -103,22 +115,20 @@ public class AgentChatActivity extends AppCompatActivity {
     private Planner planner;
     private Executor executor;
     private Policy policy;
-    private ExecutorService planningExecutor; // background thread for Planner
     private ToolRegistry registry;
-    private String plannerModeLabel = "MiniMax"; // shown in the status bar
 
-    // Saved input text to re-run after the user grants a permission
-    private String pendingRetryText;
+    // ── Background threads ────────────────────────────────────────────────
 
-    // Single background thread for tool execution
-    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
+    private ExecutorService planningExecutor; // background thread for Planner
+    private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor(); // background thread for tool execution
 
-    // ── Security fields ───────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────────────────
 
-    private BiometricHelper biometricHelper;
-    private long lastTimeInBackground = 0;
+    private Plan pendingPlan;
+    private String pendingRetryText; // saved input to re-run after permission is granted
+    private boolean spinnerReady = false; // suppresses the initial onItemSelected callback
 
-    // ── Permission launcher ───────────────────────────────────────────────
+    // ── Permission launchers ──────────────────────────────────────────────
 
     /**
      * Handles the result of the READ_CONTACTS permission request.
@@ -140,6 +150,30 @@ public class AgentChatActivity extends AppCompatActivity {
                         }
                     });
 
+    /**
+     * Handles the result of the media read permission request (images/video).
+     * If all permissions are granted and there is a saved input, re-runs it.
+     * If denied, informs the user that media search is unavailable.
+     */
+    private final ActivityResultLauncher<String[]> mediaPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestMultiplePermissions(),
+                    grants -> {
+                        boolean allGranted = !grants.isEmpty();
+                        for (Boolean granted : grants.values()) {
+                            if (!Boolean.TRUE.equals(granted)) { allGranted = false; break; }
+                        }
+                        if (allGranted && pendingRetryText != null) {
+                            String retryText = pendingRetryText;
+                            pendingRetryText = null;
+                            addAssistant("Media permission granted. Retrying...");
+                            handleUserInput(retryText);
+                        } else if (!allGranted) {
+                            addAssistant("Media permission denied. I can't search recent photos/videos without it.");
+                            setInputEnabled(true);
+                        }
+                    });
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     @Override
@@ -150,38 +184,40 @@ public class AgentChatActivity extends AppCompatActivity {
 
         initViews();
         initAgent();
-        setupLlmSpinner();
-        setupInsets();
-        setupBiometricSecurity();
+
+        // Apply status bar height as top padding so the top bar does not overlap system UI
+        View topBar = findViewById(R.id.topBar);
+        ViewCompat.setOnApplyWindowInsetsListener(topBar, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            v.setPadding(v.getPaddingLeft(), systemBars.top, v.getPaddingRight(), v.getPaddingBottom());
+            return insets;
+        });
+
+        // Apply keyboard height as bottom padding so the input area stays above the keyboard
+        View inputArea = findViewById(R.id.inputArea);
+        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets  = insets.getInsets(WindowInsetsCompat.Type.ime());
+            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         addAssistant(getString(R.string.welcome_message));
+        handleSpotifyRedirect(getIntent());
     }
 
     /**
-     * Re-triggers biometric auth if the app was in the background for more than
-     * BACKGROUND_TIMEOUT_MS. If less time passed, just hides the overlay.
+     * Called when the app is reopened via a deep link (e.g. Spotify OAuth redirect).
+     * Passes the new intent to handleSpotifyRedirect() for processing.
+     *
+     * @param intent the new Intent containing the redirect URI data
      */
     @Override
-    protected void onStart() {
-        super.onStart();
-        if (!ENABLE_SECURITY || isEmulator()) return;
-
-        if (lastTimeInBackground != 0) {
-            long timeDiff = System.currentTimeMillis() - lastTimeInBackground;
-            if (timeDiff > BACKGROUND_TIMEOUT_MS) {
-                overlay.setVisibility(View.VISIBLE);
-                if (biometricHelper != null) biometricHelper.showBiometricPrompt();
-            } else {
-                overlay.setVisibility(View.GONE);
-            }
-        }
-    }
-
-    /** Records the time when the app moves to the background. */
-    @Override
-    protected void onStop() {
-        super.onStop();
-        lastTimeInBackground = System.currentTimeMillis();
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleSpotifyRedirect(intent);
     }
 
     /** Shuts down background thread pools to avoid resource leaks. */
@@ -194,14 +230,14 @@ public class AgentChatActivity extends AppCompatActivity {
 
     // ── Init ──────────────────────────────────────────────────────────────
 
-    /** Binds all views and sets up click listeners and the RecyclerView layout. */
+    /** Binds all views, sets up click listeners, the RecyclerView layout, and the LLM Spinner. */
     private void initViews() {
-        rvMessages = findViewById(R.id.rvMessages);
-        etInput    = findViewById(R.id.etInput);
-        btnSend    = findViewById(R.id.btnSend);
-        tvStatus   = findViewById(R.id.tvStatus);
-        btnVoice   = findViewById(R.id.btnVoice);
-        spinnerLlm = findViewById(R.id.spinnerLlm);
+        rvMessages  = findViewById(R.id.rvMessages);
+        etInput     = findViewById(R.id.etInput);
+        btnSend     = findViewById(R.id.btnSend);
+        tvStatus    = findViewById(R.id.tvStatus);
+        btnVoice    = findViewById(R.id.btnVoice);
+        spinnerLlm  = findViewById(R.id.spinnerLlm);
 
         sessionStore     = new SessionStore();
         adapter          = new ChatAdapter(sessionStore.getMessages());
@@ -218,11 +254,13 @@ public class AgentChatActivity extends AppCompatActivity {
             if (actionId == EditorInfo.IME_ACTION_SEND) { onSendClicked(); return true; }
             return false;
         });
+
+        setupLlmSpinner();
     }
 
     /**
      * Registers all tools into the ToolRegistry and creates the Planner, Executor, and Policy.
-     * Default LLM is MiniMax using the hardcoded key at the top of this file.
+     * Default LLM is MockLLM; the Spinner switches it at runtime.
      */
     private void initAgent() {
         registry = new ToolRegistry();
@@ -232,145 +270,244 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
         registry.register(new NewsFeedTool());
-        registry.register(new EarthPhotoTool());
+        registry.register(new SpotifyControlTool());
+        registry.register(new MediaShareTool());
+        registry.register(new WeatherTool());
+        registry.register(new AppCapabilityTool());
 
-        planner = new Planner(
-                new MiniMaxLLMClient(registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL), registry);
-        plannerModeLabel = "MiniMax";
-        setStatus("Planner: MiniMax ready");
-
+        planner  = new Planner(new MockLLMClient(), registry);
         executor = new Executor(registry);
         policy   = new Policy();
     }
 
-    // ── Security ──────────────────────────────────────────────────────────
+    // ── Spotify redirect ──────────────────────────────────────────────────
 
     /**
-     * Sets up a full-screen black overlay and triggers biometric auth on cold start.
-     * The overlay blocks the UI until auth succeeds.
-     * On emulators, auth is skipped automatically via isEmulator().
-     */
-    private void setupBiometricSecurity() {
-        overlay = new View(this);
-        overlay.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        overlay.setBackgroundColor(ContextCompat.getColor(this, android.R.color.black));
-        overlay.setElevation(100f);
-        overlay.setClickable(true);
-        overlay.setFocusable(true);
-        ((ViewGroup) findViewById(android.R.id.content)).addView(overlay);
-
-        if (!ENABLE_SECURITY || isEmulator()) {
-            Log.i(TAG, "Security disabled or running on emulator. Bypassing authentication.");
-            overlay.setVisibility(View.GONE);
-            return;
-        }
-
-        biometricHelper = new BiometricHelper(this, new BiometricHelper.AuthCallback() {
-            @Override public void onSuccess() { overlay.setVisibility(View.GONE); }
-            @Override public void onFailure() { finishAffinity(); }
-        });
-
-        biometricHelper.showBiometricPrompt();
-    }
-
-    /**
-     * Checks common hardware and product strings to detect an Android emulator.
+     * Handles the OAuth redirect URI from Spotify after the user authorizes the app.
+     * If the intent contains a valid Spotify redirect, completes the auth flow on a
+     * background thread and retries any pending Spotify command.
      *
-     * @return true if the app appears to be running on an emulator, false on a real device
+     * @param intent the Intent to check for a Spotify redirect URI
      */
-    private boolean isEmulator() {
-        return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-                || Build.FINGERPRINT.startsWith("generic")
-                || Build.FINGERPRINT.startsWith("unknown")
-                || Build.HARDWARE.contains("goldfish")
-                || Build.HARDWARE.contains("ranchu")
-                || Build.MODEL.contains("google_sdk")
-                || Build.MODEL.contains("Emulator")
-                || Build.MODEL.contains("Android SDK built for x86")
-                || Build.MANUFACTURER.contains("Genymotion")
-                || Build.PRODUCT.contains("sdk_google")
-                || Build.PRODUCT.contains("google_sdk")
-                || Build.PRODUCT.contains("sdk")
-                || Build.PRODUCT.contains("sdk_x86")
-                || Build.PRODUCT.contains("vbox86p")
-                || Build.PRODUCT.contains("emulator")
-                || Build.PRODUCT.contains("simulator");
-    }
+    private void handleSpotifyRedirect(Intent intent) {
+        Uri data = intent != null ? intent.getData() : null;
+        SpotifyAuthManager authManager = new SpotifyAuthManager();
+        if (!authManager.canHandleRedirect(data)) return;
 
-    // ── Window insets ─────────────────────────────────────────────────────
-
-    /**
-     * Applies system bar insets to prevent the UI from overlapping the status bar or keyboard.
-     * topBar receives top padding equal to the status bar height (at least 24dp).
-     * inputArea receives bottom padding equal to the keyboard or navigation bar height.
-     */
-    private void setupInsets() {
-        View topBar    = findViewById(R.id.topBar);
-        View inputArea = findViewById(R.id.inputArea);
-        View root      = findViewById(R.id.root);
-
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets imeInsets  = insets.getInsets(WindowInsetsCompat.Type.ime());
-
-            int minTopPadding = (int) TypedValue.applyDimension(
-                    TypedValue.COMPLEX_UNIT_DIP, 24, getResources().getDisplayMetrics());
-            int finalTopPadding = Math.max(systemBars.top, minTopPadding);
-
-            topBar.setPadding(topBar.getPaddingLeft(), finalTopPadding,
-                    topBar.getPaddingRight(), topBar.getPaddingBottom());
-
-            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
-            inputArea.setPadding(inputArea.getPaddingLeft(), inputArea.getPaddingTop(),
-                    inputArea.getPaddingRight(), bottomPadding);
-
-            return WindowInsetsCompat.CONSUMED;
+        setInputEnabled(false);
+        setStatus("Connecting Spotify...");
+        bgExecutor.execute(() -> {
+            try {
+                String authMessage = authManager.handleRedirect(this, data);
+                Map<String, String> pendingArgs = authManager.consumePendingCommand(this);
+                if (pendingArgs.isEmpty()) {
+                    runOnUiThread(() -> {
+                        addAssistant(authMessage);
+                        setStatus(getString(R.string.status_ready));
+                        setInputEnabled(true);
+                    });
+                    return;
+                }
+                // Retry the Spotify command that triggered the auth flow
+                ToolResult retryResult = new SpotifyControlTool().execute(this, pendingArgs);
+                runOnUiThread(() -> {
+                    addAssistant(authMessage);
+                    addAssistant(retryResult.getStatus() == ToolResult.Status.SUCCESS
+                            ? "Spotify: " + retryResult.displayText()
+                            : "Spotify failed: " + retryResult.displayText());
+                    setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    addAssistant("Spotify authorization failed: " + e.getMessage());
+                    setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
+                });
+            }
         });
     }
 
     // ── LLM Switcher (Improvement #2) ─────────────────────────────────────
 
     /**
-     * Sets up the Spinner with three LLM options: MiniMax, Gemini, Mock.
-     * When the user picks one, calls planner.setLlmClient() to swap the backend.
-     * The change takes effect on the next user message, no Activity restart needed.
+     * Sets up the Spinner with four LLM options: MockLLM, Gemini, MiniMax, Custom LLM.
+     * spinnerReady flag suppresses the automatic onItemSelected fired on first attach.
+     * When the user picks an option, calls switchLlm() to swap the backend.
      */
     private void setupLlmSpinner() {
-        String[] llms = {"MiniMax", "Gemini", "Mock"};
-        ArrayAdapter<String> llmAdapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, llms);
-        llmAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerLlm.setAdapter(llmAdapter);
+        String[] options = {LLM_MOCK, LLM_GEMINI, LLM_MINIMAX, LLM_CUSTOM};
+        ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, options);
+        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerLlm.setAdapter(spinnerAdapter);
+        spinnerLlm.setSelection(0);
 
         spinnerLlm.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                String selected = llms[position];
-                if (planner == null) return;
-
-                switch (selected) {
-                    case "MiniMax":
-                        planner.setLlmClient(new MiniMaxLLMClient(
-                                registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL));
-                        plannerModeLabel = "MiniMax";
-                        break;
-                    case "Gemini":
-                        // Gemini key comes from BuildConfig (local.properties)
-                        planner.setLlmClient(new GeminiLLMClient(BuildConfig.GEMINI_API_KEY));
-                        plannerModeLabel = "Gemini";
-                        break;
-                    case "Mock":
-                        // MockLLM uses keyword matching, no network needed
-                        planner.setLlmClient(new MockLLMClient());
-                        plannerModeLabel = "Mock";
-                        break;
-                }
-                setStatus("Planner: " + plannerModeLabel + " ready");
+                if (!spinnerReady) { spinnerReady = true; return; }
+                switchLlm(options[position]);
             }
-
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
+    }
+
+    /**
+     * Hot-swaps the LLM backend inside Planner without restarting the Activity.
+     * Called on the main thread from the Spinner callback.
+     * If a required API key is missing, reverts the Spinner to MockLLM and shows a warning.
+     * If Custom LLM is selected and no config is saved, opens the config dialog first.
+     *
+     * @param label the display name of the selected LLM option
+     */
+    private void switchLlm(String label) {
+        switch (label) {
+            case LLM_GEMINI:
+                String geminiKey = BuildConfig.GEMINI_API_KEY.trim();
+                if (geminiKey.isEmpty()) {
+                    addAssistant("Gemini API key not found. Add GEMINI_API_KEY to local.properties.");
+                    spinnerLlm.setSelection(0);
+                    return;
+                }
+                planner.setLlmClient(new GeminiLLMClient(geminiKey));
+                break;
+
+            case LLM_MINIMAX:
+                String miniMaxKey = BuildConfig.MINIMAX_API_KEY.trim();
+                if (miniMaxKey.isEmpty()) {
+                    addAssistant("MiniMax API key not found. Add MINIMAX_API_KEY to local.properties.");
+                    spinnerLlm.setSelection(0);
+                    return;
+                }
+                planner.setLlmClient(new MiniMaxLLMClient(registry));
+                break;
+
+            case LLM_CUSTOM:
+                // Load saved config; if incomplete, show the config dialog instead
+                CustomLlmConfig config = loadCustomLlmConfig();
+                if (!config.isComplete()) { showCustomLlmDialog(); return; }
+                planner.setLlmClient(new ConfigurableLLMClient(
+                        registry, config.apiKey, config.baseUrl, config.model));
+                label = "Custom LLM (" + config.name + ")";
+                break;
+
+            case LLM_MOCK:
+            default:
+                planner.setLlmClient(new MockLLMClient());
+                break;
+        }
+
+        addAssistant("Switched to " + label);
+        setStatus("Planner: " + label + " ready");
+        Log.i(TAG, "LLM switched to: " + label);
+    }
+
+    /**
+     * Shows a dialog for the user to enter a custom OpenAI-compatible LLM config.
+     * Pre-fills fields from any previously saved config.
+     * On save, persists the config and immediately swaps the LLM backend.
+     * On cancel, reverts the Spinner back to MockLLM.
+     */
+    private void showCustomLlmDialog() {
+        CustomLlmConfig existing = loadCustomLlmConfig();
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int padding = (int) (20 * getResources().getDisplayMetrics().density);
+        layout.setPadding(padding, 8, padding, 0);
+
+        EditText name    = makeConfigEditText("Display name", existing.name);
+        EditText baseUrl = makeConfigEditText(
+                "Base URL, e.g. https://api.openai.com/v1/chat/completions", existing.baseUrl);
+        EditText model   = makeConfigEditText("Model, e.g. gpt-4o-mini", existing.model);
+        EditText apiKey  = makeConfigEditText("API key", existing.apiKey);
+        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        layout.addView(name);
+        layout.addView(baseUrl);
+        layout.addView(model);
+        layout.addView(apiKey);
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Add Custom LLM")
+                .setMessage("Use any OpenAI-compatible chat completions endpoint.")
+                .setView(layout)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    CustomLlmConfig config = new CustomLlmConfig(
+                            emptyToDefault(name.getText().toString().trim(), "Custom"),
+                            baseUrl.getText().toString().trim(),
+                            model.getText().toString().trim(),
+                            apiKey.getText().toString().trim());
+                    if (!config.isComplete()) {
+                        addAssistant("Custom LLM config is incomplete. Please provide base URL, model, and API key.");
+                        spinnerLlm.setSelection(0);
+                        return;
+                    }
+                    saveCustomLlmConfig(config);
+                    planner.setLlmClient(new ConfigurableLLMClient(
+                            registry, config.apiKey, config.baseUrl, config.model));
+                    addAssistant("Switched to Custom LLM (" + config.name + ")");
+                    setStatus("Planner: Custom LLM ready");
+                })
+                .setNegativeButton(R.string.btn_cancel, (dialog, which) -> spinnerLlm.setSelection(0))
+                .show();
+    }
+
+    /**
+     * Creates a single-line EditText pre-filled with an existing value, used in the custom LLM dialog.
+     *
+     * @param hint  the placeholder text shown when the field is empty
+     * @param value the existing value to pre-fill, may be empty
+     * @return a configured EditText ready to add to a layout
+     */
+    private EditText makeConfigEditText(String hint, String value) {
+        EditText editText = new EditText(this);
+        editText.setHint(hint);
+        editText.setSingleLine(true);
+        editText.setText(value);
+        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        return editText;
+    }
+
+    /**
+     * Returns the value if non-empty, otherwise returns the fallback string.
+     *
+     * @param value    the string to check
+     * @param fallback the default to use if value is null or empty
+     * @return value or fallback
+     */
+    private String emptyToDefault(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    /**
+     * Loads the custom LLM config from SharedPreferences.
+     *
+     * @return a CustomLlmConfig with the saved values, or empty strings if nothing is saved
+     */
+    private CustomLlmConfig loadCustomLlmConfig() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_LLM, MODE_PRIVATE);
+        return new CustomLlmConfig(
+                prefs.getString(PREF_CUSTOM_NAME, "Custom"),
+                prefs.getString(PREF_CUSTOM_BASE_URL, ""),
+                prefs.getString(PREF_CUSTOM_MODEL, ""),
+                prefs.getString(PREF_CUSTOM_API_KEY, ""));
+    }
+
+    /**
+     * Saves the custom LLM config to SharedPreferences so it persists across sessions.
+     *
+     * @param config the config to save
+     */
+    private void saveCustomLlmConfig(CustomLlmConfig config) {
+        getSharedPreferences(PREFS_LLM, MODE_PRIVATE)
+                .edit()
+                .putString(PREF_CUSTOM_NAME, config.name)
+                .putString(PREF_CUSTOM_BASE_URL, config.baseUrl)
+                .putString(PREF_CUSTOM_MODEL, config.model)
+                .putString(PREF_CUSTOM_API_KEY, config.apiKey)
+                .apply();
     }
 
     // ── User input handling ───────────────────────────────────────────────
@@ -385,7 +522,7 @@ public class AgentChatActivity extends AppCompatActivity {
 
     /**
      * Entry point for all user messages (text and voice).
-     * Disables input and shows a loading indicator while Planner runs on a background thread.
+     * Disables input while Planner runs on a background thread.
      * On success, calls presentPlan() on the main thread.
      * On failure, shows the error in the chat.
      *
@@ -394,20 +531,15 @@ public class AgentChatActivity extends AppCompatActivity {
     private void handleUserInput(String text) {
         addUser(text);
         setInputEnabled(false);
-        setStatus("Planner: " + plannerModeLabel + " planning...");
-        adapter.setLoading(true);
-        rvMessages.scrollToPosition(adapter.getItemCount() - 1);
+        String currentLlm = (String) spinnerLlm.getSelectedItem();
+        setStatus("Planner: " + currentLlm + " planning...");
 
         planningExecutor.execute(() -> {
             try {
                 Plan plan = planner.createPlan(text, sessionStore);
-                runOnUiThread(() -> {
-                    adapter.setLoading(false);
-                    presentPlan(plan, text);
-                });
+                runOnUiThread(() -> presentPlan(plan, text));
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    adapter.setLoading(false);
                     addAssistant("Planning failed: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
                     setInputEnabled(true);
@@ -436,6 +568,7 @@ public class AgentChatActivity extends AppCompatActivity {
         setStatus("Planned " + plan.getActions().size() + " action(s). Awaiting confirmation...");
 
         if (policy.requiresPreview(plan)) {
+            pendingPlan = plan;
             ActionPreviewHelper.show(this, plan, new ActionPreviewHelper.Callback() {
                 @Override
                 public void onConfirm() {
@@ -447,6 +580,7 @@ public class AgentChatActivity extends AppCompatActivity {
                     addAssistant(getString(R.string.cancelled));
                     setStatus(getString(R.string.status_ready));
                     setInputEnabled(true);
+                    pendingPlan = null;
                 }
             });
         } else {
@@ -455,20 +589,24 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
+    // ── Plan execution (Improvement #1) ───────────────────────────────────
+
     /**
      * Runs the plan on a background thread using bgExecutor.
-     * After all tools finish, shows each result in the chat on the main thread.
+     * Each tool result is delivered individually back on the main thread
+     * so the status bar updates live as steps complete (Improvement #1).
      *
      * Three result statuses:
      *   SUCCESS         -- show the result text
-     *   NEED_PERMISSION -- request READ_CONTACTS permission and save input for retry
+     *   NEED_PERMISSION -- request the required permission and save input for retry
      *   FAIL            -- show an error message
      *
      * @param plan             the confirmed plan to execute
      * @param originalUserText the original input, saved for retry if permission is needed
      */
     private void executePlan(Plan plan, String originalUserText) {
-        setStatus("Executing actions...");
+        int totalSteps = plan.getActions().size();
+        setStatus("Executing... Step 1/" + totalSteps);
         setInputEnabled(false);
 
         bgExecutor.execute(() -> {
@@ -479,15 +617,26 @@ public class AgentChatActivity extends AppCompatActivity {
                 runOnUiThread(() -> {
                     addAssistant("Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
+                    pendingPlan = null;
                     setInputEnabled(true);
                 });
                 return;
             }
 
-            runOnUiThread(() -> {
-                for (int i = 0; i < results.size(); i++) {
-                    ToolResult r = results.get(i);
-                    String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
+            // Deliver each result to the main thread one at a time for live progress updates
+            for (int i = 0; i < results.size(); i++) {
+                final int stepIndex = i;
+                final ToolResult r  = results.get(i);
+                final String stepLabel = "Step " + (stepIndex + 1) + "/" + totalSteps + ": ";
+
+                runOnUiThread(() -> {
+                    // Advance the status bar to the next step number
+                    int nextStep = stepIndex + 2;
+                    if (nextStep <= totalSteps) {
+                        setStatus("Executing... Step " + nextStep + "/" + totalSteps);
+                    } else {
+                        setStatus(getString(R.string.status_ready));
+                    }
 
                     switch (r.getStatus()) {
                         case SUCCESS:
@@ -496,33 +645,65 @@ public class AgentChatActivity extends AppCompatActivity {
                         case NEED_PERMISSION:
                             addAssistant(stepLabel + r.displayText());
                             pendingRetryText = originalUserText;
-                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+                            requestPermissionForTool(r);
                             setStatus(getString(R.string.status_ready));
+                            pendingPlan = null;
                             setInputEnabled(true);
-                            return;
+                            return; // stop here — will retry from the permission launcher
                         case FAIL:
                         default:
                             addAssistant(stepLabel + "Failed -- " + r.displayText());
                             break;
                     }
-                }
-                setStatus(getString(R.string.status_ready));
-                setInputEnabled(true);
-            });
+
+                    if (stepIndex == results.size() - 1) {
+                        pendingPlan = null;
+                        setInputEnabled(true);
+                    }
+                });
+            }
         });
     }
 
-    // ── UI helpers ────────────────────────────────────────────────────────
+    /**
+     * Routes the permission request to the correct launcher based on which tool needs it.
+     * If no handler is registered for the tool, informs the user.
+     *
+     * @param result the ToolResult that reported NEED_PERMISSION
+     */
+    private void requestPermissionForTool(ToolResult result) {
+        Map<String, String> audit = result.getAudit();
+        String toolName = audit != null ? audit.getOrDefault("tool", "") : "";
+
+        if ("contacts.lookup".equals(toolName)) {
+            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+            return;
+        }
+        if ("media.share".equals(toolName)) {
+            mediaPermissionLauncher.launch(mediaPermissions());
+            return;
+        }
+        addAssistant("Permission is required, but no handler is registered for: " + toolName);
+    }
 
     /**
-     * Enables or disables the text input field and send button together.
+     * Returns the correct media read permissions for the current Android version.
+     * Android 13+ uses granular READ_MEDIA_IMAGES / READ_MEDIA_VIDEO.
+     * Older versions use the broader READ_EXTERNAL_STORAGE.
      *
-     * @param enabled true to allow input, false to block it during processing
+     * @return the array of permission strings to request
      */
-    private void setInputEnabled(boolean enabled) {
-        etInput.setEnabled(enabled);
-        btnSend.setEnabled(enabled);
+    private String[] mediaPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return new String[]{
+                    Manifest.permission.READ_MEDIA_IMAGES,
+                    Manifest.permission.READ_MEDIA_VIDEO
+            };
+        }
+        return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
     }
+
+    // ── UI helpers ────────────────────────────────────────────────────────
 
     /**
      * Adds a USER message to the session and refreshes the list.
@@ -547,7 +728,7 @@ public class AgentChatActivity extends AppCompatActivity {
     /** Tells the adapter a new message was added and scrolls the list to the bottom. */
     private void notifyAndScroll() {
         adapter.notifyItemInserted(sessionStore.getMessages().size() - 1);
-        rvMessages.scrollToPosition(adapter.getItemCount() - 1);
+        rvMessages.scrollToPosition(sessionStore.getMessages().size() - 1);
     }
 
     /**
@@ -559,12 +740,41 @@ public class AgentChatActivity extends AppCompatActivity {
         tvStatus.setText(text);
     }
 
+    /**
+     * Enables or disables the text input field and send button together.
+     *
+     * @param enabled true to allow input, false to block it during processing
+     */
+    private void setInputEnabled(boolean enabled) {
+        etInput.setEnabled(enabled);
+        btnSend.setEnabled(enabled);
+    }
+
     // ── Voice recognition ─────────────────────────────────────────────────
 
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
     private SpeechRecognizer speechRecognizer;
     private Intent speechRecognizerIntent;
     private boolean isListening = false;
+
+    /**
+     * Toggles voice recognition on and off.
+     * Also handles the case where the voice engine gets stuck by destroying and recreating it.
+     */
+    private void handleVoiceButtonClick() {
+        if (tvStatus.getText().toString().contains("busy")) {
+            isListening = false;
+            if (speechRecognizer != null) { speechRecognizer.destroy(); speechRecognizer = null; }
+        }
+        if (!isListening) {
+            checkAndRequestAudioPermission();
+            isListening = true;
+            setStatus("Listening...");
+            btnVoice.setImageResource(android.R.drawable.ic_media_pause);
+        } else {
+            stopVoiceAction();
+        }
+    }
 
     /**
      * Checks microphone permission before starting voice recognition.
@@ -593,25 +803,6 @@ public class AgentChatActivity extends AppCompatActivity {
             } else {
                 Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
             }
-        }
-    }
-
-    /**
-     * Toggles voice recognition on and off.
-     * Also handles the case where the voice engine gets stuck by destroying and recreating it.
-     */
-    private void handleVoiceButtonClick() {
-        if (tvStatus.getText().toString().contains("busy")) {
-            isListening = false;
-            if (speechRecognizer != null) { speechRecognizer.destroy(); speechRecognizer = null; }
-        }
-        if (!isListening) {
-            checkAndRequestAudioPermission();
-            isListening = true;
-            setStatus("Listening...");
-            btnVoice.setImageResource(android.R.drawable.ic_media_pause);
-        } else {
-            stopVoiceAction();
         }
     }
 
@@ -647,7 +838,7 @@ public class AgentChatActivity extends AppCompatActivity {
                 public void onError(int error) {
                     stopVoiceAction();
                     if (error == SpeechRecognizer.ERROR_CLIENT) {
-                        setStatus("Voice engine is busy. tap again.");
+                        setStatus("Voice engine is busy. Tap again.");
                         if (speechRecognizer != null) {
                             speechRecognizer.destroy();
                             speechRecognizer = null;
@@ -683,5 +874,30 @@ public class AgentChatActivity extends AppCompatActivity {
         btnVoice.setImageResource(android.R.drawable.ic_media_pause);
         setStatus("Listening...");
         speechRecognizer.startListening(speechRecognizerIntent);
+    }
+
+    // ── Custom LLM config data class ──────────────────────────────────────
+
+    /**
+     * Holds the user-provided config for a custom OpenAI-compatible LLM endpoint.
+     * isComplete() returns true only when all required fields are filled in.
+     */
+    private static class CustomLlmConfig {
+        final String name;
+        final String baseUrl;
+        final String model;
+        final String apiKey;
+
+        CustomLlmConfig(String name, String baseUrl, String model, String apiKey) {
+            this.name    = name    != null ? name.trim()    : "Custom";
+            this.baseUrl = baseUrl != null ? baseUrl.trim() : "";
+            this.model   = model   != null ? model.trim()   : "";
+            this.apiKey  = apiKey  != null ? apiKey.trim()  : "";
+        }
+
+        /** @return true if baseUrl, model, and apiKey are all non-empty */
+        boolean isComplete() {
+            return !baseUrl.isEmpty() && !model.isEmpty() && !apiKey.isEmpty();
+        }
     }
 }

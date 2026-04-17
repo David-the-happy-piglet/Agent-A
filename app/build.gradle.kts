@@ -27,13 +27,15 @@ android {
         val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY", "")
         val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimax.io/v1/text/chatcompletion_v2")
         val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
-        val googleClientId = localProperties.getProperty("GOOGLE_CLIENT_ID", "")
+        val spotifyClientId = localProperties.getProperty("SPOTIFY_CLIENT_ID", "")
+        val spotifyRedirectUri = localProperties.getProperty("SPOTIFY_REDIRECT_URI", "agenta://spotify-auth")
 
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
         buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
         buildConfigField("String", "MINIMAX_MODEL", "\"$minimaxModel\"")
         buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
-        buildConfigField("String", "GOOGLE_CLIENT_ID", "\"$googleClientId\"")
+        buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"$spotifyClientId\"")
+        buildConfigField("String", "SPOTIFY_REDIRECT_URI", "\"$spotifyRedirectUri\"")
     }
 
     buildFeatures {
@@ -54,13 +56,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            excludes += "META-INF/DEPENDENCIES"
-        }
-    }
 }
 
 dependencies {
@@ -69,15 +64,6 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.constraintlayout)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.biometric:biometric:1.1.0")
-    
-    // Glide for image loading
-    implementation("com.github.bumptech.glide:glide:4.16.0")
-
-    // Google Sign-In and Gmail API
-    implementation("com.google.android.gms:play-services-auth:21.3.0")
-    implementation("com.google.api-client:google-api-client-android:2.7.2")
-    implementation("com.google.apis:google-api-services-gmail:v1-rev20240905-2.0.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
