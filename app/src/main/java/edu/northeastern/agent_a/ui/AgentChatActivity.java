@@ -2,22 +2,21 @@ package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
-import android.text.InputType;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageButton;
-import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -36,12 +35,10 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
-import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -52,66 +49,63 @@ import edu.northeastern.agent_a.core.agent.Planner;
 import edu.northeastern.agent_a.core.agent.Policy;
 import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
-import edu.northeastern.agent_a.core.tools.AppCapabilityTool;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
+import edu.northeastern.agent_a.core.tools.EarthPhotoTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
-import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
-import edu.northeastern.agent_a.core.tools.MediaShareTool;
 import edu.northeastern.agent_a.core.tools.NewsFeedTool;
+import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
-import edu.northeastern.agent_a.core.tools.SpotifyControlTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
-import edu.northeastern.agent_a.core.tools.WeatherTool;
-import edu.northeastern.agent_a.llm.ConfigurableLLMClient;
 import edu.northeastern.agent_a.llm.GeminiLLMClient;
 import edu.northeastern.agent_a.llm.MiniMaxLLMClient;
 import edu.northeastern.agent_a.llm.MockLLMClient;
 
+
 public class AgentChatActivity extends AppCompatActivity {
 
     private static final String TAG = "AgentChatActivity";
+    private static final long BACKGROUND_TIMEOUT_MS = 30000; // 30 seconds
 
-    // ── LLM switcher labels (order must match buildLlmClient switch) ──────
-    private static final String LLM_MOCK   = "MockLLM";
-    private static final String LLM_GEMINI = "Gemini";
-    private static final String LLM_MINIMAX = "MiniMax";
-    private static final String LLM_CUSTOM = "Custom LLM";
+    /**
+     * SECURITY SWITCH: 
+     * Set to true to enable biometric/passcode protection.
+     * Set to false for testing without auth data.
+     */
+    private static final boolean ENABLE_SECURITY = true; 
 
-    private static final String PREFS_LLM = "custom_llm";
-    private static final String PREF_CUSTOM_NAME = "name";
-    private static final String PREF_CUSTOM_BASE_URL = "base_url";
-    private static final String PREF_CUSTOM_MODEL = "model";
-    private static final String PREF_CUSTOM_API_KEY = "api_key";
+    // Hardcoded credentials for MiniMax as local.properties is blocked
+    private static final String MINIMAX_KEY = "sk-api-6YAGoYgYvcz2mDpeFzdRtGG2fFKPl4OcJJOO3wAqRIGVTrPA6cXFeh9y4pmkYgY8t8I9f81qnEnNiJhPrxhz4rtpGKIgETCSsdvdxDDaNVC0oWZWsaFT0jk";
+    private static final String MINIMAX_URL = "https://api.minimax.io/v1/text/chatcompletion_v2";
+    private static final String MINIMAX_MODEL = "M2-her";
 
-    // ── Views ─────────────────────────────────────────────────────────────
     private RecyclerView rvMessages;
     private EditText etInput;
     private MaterialButton btnSend;
     private TextView tvStatus;
     private ImageButton btnVoice;
     private Spinner spinnerLlm;
+    private View overlay; // Protection overlay
 
-    // ── Agent components ──────────────────────────────────────────────────
     private ChatAdapter adapter;
     private SessionStore sessionStore;
     private Planner planner;
     private Executor executor;
     private Policy policy;
-    private ToolRegistry registry;
-
-    // ── Background threads ────────────────────────────────────────────────
     private ExecutorService planningExecutor;
+    private ToolRegistry registry;
+    private String plannerModeLabel = "MiniMax";
+
+    private String pendingRetryText;
+
     private final ExecutorService bgExecutor = Executors.newSingleThreadExecutor();
 
-    // ── State ─────────────────────────────────────────────────────────────
-    private Plan pendingPlan;
-    private String pendingRetryText;
-    private boolean spinnerReady = false; // suppresses the initial onItemSelected callback
+    // Biometric security fields
+    private BiometricHelper biometricHelper;
+    private long lastTimeInBackground = 0;
 
-    // ── Permission launcher ───────────────────────────────────────────────
     private final ActivityResultLauncher<String> contactsPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
@@ -127,83 +121,133 @@ public class AgentChatActivity extends AppCompatActivity {
                         }
                     });
 
-    private final ActivityResultLauncher<String[]> mediaPermissionLauncher =
-            registerForActivityResult(
-                    new ActivityResultContracts.RequestMultiplePermissions(),
-                    grants -> {
-                        boolean allGranted = !grants.isEmpty();
-                        for (Boolean granted : grants.values()) {
-                            if (!Boolean.TRUE.equals(granted)) {
-                                allGranted = false;
-                                break;
-                            }
-                        }
-
-                        if (allGranted && pendingRetryText != null) {
-                            String retryText = pendingRetryText;
-                            pendingRetryText = null;
-                            addAssistant("Media permission granted. Retrying...");
-                            handleUserInput(retryText);
-                        } else if (!allGranted) {
-                            addAssistant("Media permission denied. I can't search recent photos/videos without it.");
-                            setInputEnabled(true);
-                        }
-                    });
-
-    // ═════════════════════════════════════════════════════════════════════
-    // Lifecycle
-    // ═════════════════════════════════════════════════════════════════════
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_agent_chat);
-
+        
         initViews();
         initAgent();
-
-        // Fix top overlap: apply status bar height as top padding on the top bar
-        View topBar = findViewById(R.id.topBar);
-        ViewCompat.setOnApplyWindowInsetsListener(topBar, (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(v.getPaddingLeft(), systemBars.top, v.getPaddingRight(), v.getPaddingBottom());
-            return insets; // pass through so inputArea also receives insets
-        });
-
-        View inputArea = findViewById(R.id.inputArea);
-        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {
-            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets imeInsets  = insets.getInsets(WindowInsetsCompat.Type.ime());
-            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
-            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);
-            return WindowInsetsCompat.CONSUMED;
-        });
+        setupLlmSpinner();
+        
+        setupInsets();
+        setupBiometricSecurity();
 
         addAssistant(getString(R.string.welcome_message));
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (planningExecutor != null) planningExecutor.shutdownNow();
-        bgExecutor.shutdownNow();
+    private void setupBiometricSecurity() {
+        overlay = new View(this);
+        overlay.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        overlay.setBackgroundColor(ContextCompat.getColor(this, android.R.color.black));
+        overlay.setElevation(100f);
+        overlay.setClickable(true);
+        overlay.setFocusable(true);
+        ((ViewGroup) findViewById(android.R.id.content)).addView(overlay);
+
+        if (!ENABLE_SECURITY || isEmulator()) {
+            Log.i(TAG, "Security disabled or running on emulator. Bypassing authentication.");
+            overlay.setVisibility(View.GONE);
+            return;
+        }
+
+        biometricHelper = new BiometricHelper(this, new BiometricHelper.AuthCallback() {
+            @Override
+            public void onSuccess() {
+                overlay.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onFailure() {
+                finishAffinity();
+            }
+        });
+
+        // Initial Cold Start Authentication
+        biometricHelper.showBiometricPrompt();
     }
 
-    // ═════════════════════════════════════════════════════════════════════
-    // Init
-    // ═════════════════════════════════════════════════════════════════════
+    private boolean isEmulator() {
+        return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || Build.PRODUCT.contains("sdk_google")
+                || Build.PRODUCT.contains("google_sdk")
+                || Build.PRODUCT.contains("sdk")
+                || Build.PRODUCT.contains("sdk_x86")
+                || Build.PRODUCT.contains("vbox86p")
+                || Build.PRODUCT.contains("emulator")
+                || Build.PRODUCT.contains("simulator");
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (!ENABLE_SECURITY || isEmulator()) {
+            return;
+        }
+
+        if (lastTimeInBackground != 0) {
+            long timeDiff = System.currentTimeMillis() - lastTimeInBackground;
+            if (timeDiff > BACKGROUND_TIMEOUT_MS) {
+                overlay.setVisibility(View.VISIBLE);
+                if (biometricHelper != null) {
+                    biometricHelper.showBiometricPrompt();
+                }
+            } else {
+                overlay.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        lastTimeInBackground = System.currentTimeMillis();
+    }
+
+    private void setupInsets() {
+        View topBar = findViewById(R.id.topBar);
+        View inputArea = findViewById(R.id.inputArea);
+        View root = findViewById(R.id.root);
+        
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());
+
+            // 保护策略：如果系统返回高度太小（如模拟器上），设置一个最小的 24dp padding
+            int minTopPadding = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 24, getResources().getDisplayMetrics());
+            int finalTopPadding = Math.max(systemBars.top, minTopPadding);
+
+            // 增加额外的内边距，确保内容不被状态栏图标遮挡且可点击
+            topBar.setPadding(topBar.getPaddingLeft(), finalTopPadding, topBar.getPaddingRight(), topBar.getPaddingBottom());
+
+            // 底部处理
+            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);
+            inputArea.setPadding(inputArea.getPaddingLeft(), inputArea.getPaddingTop(), inputArea.getPaddingRight(), bottomPadding);
+
+            return WindowInsetsCompat.CONSUMED;
+        });
+    }
 
     private void initViews() {
-        rvMessages  = findViewById(R.id.rvMessages);
-        etInput     = findViewById(R.id.etInput);
-        btnSend     = findViewById(R.id.btnSend);
-        tvStatus    = findViewById(R.id.tvStatus);
-        btnVoice    = findViewById(R.id.btnVoice);
-        spinnerLlm  = findViewById(R.id.spinnerLlm);
-
-        sessionStore    = new SessionStore();
-        adapter         = new ChatAdapter(sessionStore.getMessages());
+        rvMessages = findViewById(R.id.rvMessages);
+        etInput = findViewById(R.id.etInput);
+        btnSend = findViewById(R.id.btnSend);
+        tvStatus = findViewById(R.id.tvStatus);
+        btnVoice = findViewById(R.id.btnVoice);
+        spinnerLlm = findViewById(R.id.spinnerLlm);
+        sessionStore = new SessionStore();
+        adapter = new ChatAdapter(sessionStore.getMessages());
         planningExecutor = Executors.newSingleThreadExecutor();
 
         LinearLayoutManager lm = new LinearLayoutManager(this);
@@ -220,8 +264,41 @@ public class AgentChatActivity extends AppCompatActivity {
             }
             return false;
         });
+    }
 
-        setupLlmSpinner();
+    private void setupLlmSpinner() {
+        String[] llms = {"MiniMax", "Gemini", "Mock"};
+        ArrayAdapter<String> llmAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, llms);
+        llmAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerLlm.setAdapter(llmAdapter);
+
+        spinnerLlm.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String selected = llms[position];
+                if (planner == null) return;
+                
+                switch (selected) {
+                    case "MiniMax":
+                        planner.setLlmClient(new MiniMaxLLMClient(registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL));
+                        plannerModeLabel = "MiniMax";
+                        break;
+                    case "Gemini":
+                        planner.setLlmClient(new GeminiLLMClient(BuildConfig.GEMINI_API_KEY));
+                        plannerModeLabel = "Gemini";
+                        break;
+                    case "Mock":
+                        planner.setLlmClient(new MockLLMClient());
+                        plannerModeLabel = "Mock";
+                        break;
+                }
+                setStatus("Planner: " + plannerModeLabel + " ready");
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
     }
 
     private void initAgent() {
@@ -232,175 +309,16 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
         registry.register(new NewsFeedTool());
-        registry.register(new SpotifyControlTool());
-        registry.register(new MediaShareTool());
-        registry.register(new WeatherTool());
-        registry.register(new AppCapabilityTool());
+        registry.register(new EarthPhotoTool());
 
-        // Default to MockLLM; the Spinner will trigger a switch if the user selects another
-        planner  = new Planner(new MockLLMClient(), registry);
+        // Default to MiniMax using the hardcoded key
+        planner = new Planner(new MiniMaxLLMClient(registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL), registry);
+        plannerModeLabel = "MiniMax";
+        setStatus("Planner: MiniMax ready");
+
         executor = new Executor(registry);
-        policy   = new Policy();
+        policy = new Policy();
     }
-
-    // ═════════════════════════════════════════════════════════════════════
-    // LLM Switcher (Improvement #2)
-    // ═════════════════════════════════════════════════════════════════════
-
-    private void setupLlmSpinner() {
-        String[] options = {LLM_MOCK, LLM_GEMINI, LLM_MINIMAX, LLM_CUSTOM};
-        ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, options);
-        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerLlm.setAdapter(spinnerAdapter);
-        spinnerLlm.setSelection(0); // default: MockLLM
-
-        spinnerLlm.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                if (!spinnerReady) {
-                    // Skip the initial callback fired when the Spinner is first attached
-                    spinnerReady = true;
-                    return;
-                }
-                String selected = options[position];
-                switchLlm(selected);
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {}
-        });
-    }
-
-    /**
-     * Hot-swaps the LLM backend inside Planner without restarting the Activity.
-     * Called on the main thread from the Spinner callback.
-     */
-    private void switchLlm(String label) {
-        switch (label) {
-            case LLM_GEMINI:
-                String geminiKey = BuildConfig.GEMINI_API_KEY.trim();
-                if (geminiKey.isEmpty()) {
-                    addAssistant("⚠️ Gemini API key not found. Add GEMINI_API_KEY to local.properties.");
-                    spinnerLlm.setSelection(0); // revert to Mock
-                    return;
-                }
-                planner.setLlmClient(new GeminiLLMClient(geminiKey));
-                break;
-
-            case LLM_MINIMAX:
-                String miniMaxKey = BuildConfig.MINIMAX_API_KEY.trim();
-                if (miniMaxKey.isEmpty()) {
-                    addAssistant("⚠️ MiniMax API key not found. Add MINIMAX_API_KEY to local.properties.");
-                    spinnerLlm.setSelection(0); // revert to Mock
-                    return;
-                }
-                planner.setLlmClient(new MiniMaxLLMClient(registry));
-                break;
-
-            case LLM_CUSTOM:
-                CustomLlmConfig config = loadCustomLlmConfig();
-                if (!config.isComplete()) {
-                    showCustomLlmDialog();
-                    return;
-                }
-                planner.setLlmClient(new ConfigurableLLMClient(
-                        registry, config.apiKey, config.baseUrl, config.model));
-                label = "Custom LLM (" + config.name + ")";
-                break;
-
-            case LLM_MOCK:
-            default:
-                planner.setLlmClient(new MockLLMClient());
-                break;
-        }
-
-        addAssistant("🔄 Switched to " + label);
-        setStatus("Planner: " + label + " ready");
-        Log.i(TAG, "LLM switched to: " + label);
-    }
-
-    private void showCustomLlmDialog() {
-        CustomLlmConfig existing = loadCustomLlmConfig();
-
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int padding = (int) (20 * getResources().getDisplayMetrics().density);
-        layout.setPadding(padding, 8, padding, 0);
-
-        EditText name = makeConfigEditText("Display name", existing.name);
-        EditText baseUrl = makeConfigEditText(
-                "Base URL, e.g. https://api.openai.com/v1/chat/completions",
-                existing.baseUrl);
-        EditText model = makeConfigEditText("Model, e.g. gpt-4o-mini", existing.model);
-        EditText apiKey = makeConfigEditText("API key", existing.apiKey);
-        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-
-        layout.addView(name);
-        layout.addView(baseUrl);
-        layout.addView(model);
-        layout.addView(apiKey);
-
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("Add Custom LLM")
-                .setMessage("Use any OpenAI-compatible chat completions endpoint.")
-                .setView(layout)
-                .setPositiveButton("Save", (dialog, which) -> {
-                    CustomLlmConfig config = new CustomLlmConfig(
-                            emptyToDefault(name.getText().toString().trim(), "Custom"),
-                            baseUrl.getText().toString().trim(),
-                            model.getText().toString().trim(),
-                            apiKey.getText().toString().trim());
-                    if (!config.isComplete()) {
-                        addAssistant("Custom LLM config is incomplete. Please provide base URL, model, and API key.");
-                        spinnerLlm.setSelection(0);
-                        return;
-                    }
-                    saveCustomLlmConfig(config);
-                    planner.setLlmClient(new ConfigurableLLMClient(
-                            registry, config.apiKey, config.baseUrl, config.model));
-                    addAssistant("Switched to Custom LLM (" + config.name + ")");
-                    setStatus("Planner: Custom LLM ready");
-                })
-                .setNegativeButton(R.string.btn_cancel, (dialog, which) -> spinnerLlm.setSelection(0))
-                .show();
-    }
-
-    private EditText makeConfigEditText(String hint, String value) {
-        EditText editText = new EditText(this);
-        editText.setHint(hint);
-        editText.setSingleLine(true);
-        editText.setText(value);
-        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        return editText;
-    }
-
-    private String emptyToDefault(String value, String fallback) {
-        return value == null || value.trim().isEmpty() ? fallback : value.trim();
-    }
-
-    private CustomLlmConfig loadCustomLlmConfig() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_LLM, MODE_PRIVATE);
-        return new CustomLlmConfig(
-                prefs.getString(PREF_CUSTOM_NAME, "Custom"),
-                prefs.getString(PREF_CUSTOM_BASE_URL, ""),
-                prefs.getString(PREF_CUSTOM_MODEL, ""),
-                prefs.getString(PREF_CUSTOM_API_KEY, ""));
-    }
-
-    private void saveCustomLlmConfig(CustomLlmConfig config) {
-        getSharedPreferences(PREFS_LLM, MODE_PRIVATE)
-                .edit()
-                .putString(PREF_CUSTOM_NAME, config.name)
-                .putString(PREF_CUSTOM_BASE_URL, config.baseUrl)
-                .putString(PREF_CUSTOM_MODEL, config.model)
-                .putString(PREF_CUSTOM_API_KEY, config.apiKey)
-                .apply();
-    }
-
-    // ═════════════════════════════════════════════════════════════════════
-    // User input handling
-    // ═════════════════════════════════════════════════════════════════════
 
     private void onSendClicked() {
         String text = etInput.getText().toString().trim();
@@ -412,15 +330,20 @@ public class AgentChatActivity extends AppCompatActivity {
     private void handleUserInput(String text) {
         addUser(text);
         setInputEnabled(false);
-        String currentLlm = (String) spinnerLlm.getSelectedItem();
-        setStatus("Planner: " + currentLlm + " planning...");
+        setStatus("Planner: " + plannerModeLabel + " planning...");
+        adapter.setLoading(true);
+        rvMessages.scrollToPosition(adapter.getItemCount() - 1);
 
         planningExecutor.execute(() -> {
             try {
                 Plan plan = planner.createPlan(text, sessionStore);
-                runOnUiThread(() -> presentPlan(plan, text));
+                runOnUiThread(() -> {
+                    adapter.setLoading(false);
+                    presentPlan(plan, text);
+                });
             } catch (Exception e) {
                 runOnUiThread(() -> {
+                    adapter.setLoading(false);
                     addAssistant("Planning failed: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
                     setInputEnabled(true);
@@ -437,10 +360,10 @@ public class AgentChatActivity extends AppCompatActivity {
             return;
         }
 
-        setStatus("Planned " + plan.getActions().size() + " action(s). Awaiting confirmation…");
+        setStatus("Planned " + plan.getActions().size()
+                + " action(s). Awaiting confirmation…");
 
         if (policy.requiresPreview(plan)) {
-            pendingPlan = plan;
             ActionPreviewHelper.show(this, plan, new ActionPreviewHelper.Callback() {
                 @Override
                 public void onConfirm() {
@@ -453,7 +376,6 @@ public class AgentChatActivity extends AppCompatActivity {
                     addAssistant(getString(R.string.cancelled));
                     setStatus(getString(R.string.status_ready));
                     setInputEnabled(true);
-                    pendingPlan = null;
                 }
             });
         } else {
@@ -462,13 +384,8 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════════
-    // Plan execution with step-by-step feedback (Improvement #1)
-    // ═════════════════════════════════════════════════════════════════════
-
     private void executePlan(Plan plan, String originalUserText) {
-        int totalSteps = plan.getActions().size();
-        setStatus("Executing… Step 1/" + totalSteps);
+        setStatus("Executing actions...");
         setInputEnabled(false);
 
         bgExecutor.execute(() -> {
@@ -477,91 +394,54 @@ public class AgentChatActivity extends AppCompatActivity {
                 results = executor.execute(this, plan);
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    addAssistant("❌ Error: " + e.getMessage());
+                    addAssistant("Error: " + e.getMessage());
                     setStatus(getString(R.string.status_ready));
-                    pendingPlan = null;
                     setInputEnabled(true);
                 });
                 return;
             }
 
-            // Deliver each step result individually back on the main thread,
-            // updating the status bar as we go so the user sees live progress.
-            for (int i = 0; i < results.size(); i++) {
-                final int stepIndex  = i;
-                final ToolResult r   = results.get(i);
-                final String stepLabel = "Step " + (stepIndex + 1) + "/" + totalSteps + ": ";
-
-                runOnUiThread(() -> {
-                    // Update progress in the status bar for every completed step
-                    int nextStep = stepIndex + 2; // "next" step number (1-indexed)
-                    if (nextStep <= totalSteps) {
-                        setStatus("Executing… Step " + nextStep + "/" + totalSteps);
-                    } else {
-                        setStatus(getString(R.string.status_ready));
-                    }
+            runOnUiThread(() -> {
+                for (int i = 0; i < results.size(); i++) {
+                    ToolResult r = results.get(i);
+                    String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
 
                     switch (r.getStatus()) {
                         case SUCCESS:
-                            addAssistant("✅ " + stepLabel + r.displayText());
+                            addAssistant(stepLabel + r.displayText());
                             break;
-
                         case NEED_PERMISSION:
-                            addAssistant("🔑 " + stepLabel + r.displayText());
+                            addAssistant(stepLabel + r.displayText());
                             pendingRetryText = originalUserText;
-                            requestPermissionForTool(r);
+                            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
                             setStatus(getString(R.string.status_ready));
-                            pendingPlan = null;
                             setInputEnabled(true);
-                            // Return early — permission flow will retry the whole input
                             return;
-
                         case FAIL:
                         default:
-                            addAssistant("❌ " + stepLabel + "Failed — " + r.displayText());
+                            addAssistant(stepLabel + "Failed — " + r.displayText());
                             break;
                     }
-
-                    // After the last step, re-enable input
-                    if (stepIndex == results.size() - 1) {
-                        pendingPlan = null;
-                        setInputEnabled(true);
-                    }
-                });
-            }
+                }
+                setStatus(getString(R.string.status_ready));
+                setInputEnabled(true);
+            });
         });
     }
 
-    private void requestPermissionForTool(ToolResult result) {
-        Map<String, String> audit = result.getAudit();
-        String toolName = audit != null ? audit.getOrDefault("tool", "") : "";
-
-        if ("contacts.lookup".equals(toolName)) {
-            contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
-            return;
-        }
-
-        if ("media.share".equals(toolName)) {
-            mediaPermissionLauncher.launch(mediaPermissions());
-            return;
-        }
-
-        addAssistant("Permission is required, but no permission handler is registered for " + toolName + ".");
+    private void setInputEnabled(boolean enabled) {
+        etInput.setEnabled(enabled);
+        btnSend.setEnabled(enabled);
     }
 
-    private String[] mediaPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            return new String[]{
-                    Manifest.permission.READ_MEDIA_IMAGES,
-                    Manifest.permission.READ_MEDIA_VIDEO
-            };
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (planningExecutor != null) {
+            planningExecutor.shutdownNow();
         }
-        return new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
+        bgExecutor.shutdownNow();
     }
-
-    // ═════════════════════════════════════════════════════════════════════
-    // UI helpers
-    // ═════════════════════════════════════════════════════════════════════
 
     private void addUser(String text) {
         sessionStore.addMessage(new Message(Message.Role.USER, text));
@@ -575,23 +455,41 @@ public class AgentChatActivity extends AppCompatActivity {
 
     private void notifyAndScroll() {
         adapter.notifyItemInserted(sessionStore.getMessages().size() - 1);
-        rvMessages.scrollToPosition(sessionStore.getMessages().size() - 1);
+        rvMessages.scrollToPosition(adapter.getItemCount() - 1);
     }
 
     private void setStatus(String text) {
         tvStatus.setText(text);
     }
 
-    private void setInputEnabled(boolean enabled) {
-        etInput.setEnabled(enabled);
-        btnSend.setEnabled(enabled);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════
-    // Voice recognition
-    // ═════════════════════════════════════════════════════════════════════
+    // ── Voice recognition ───────────────────────────────────────────
 
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
+
+    private void checkAndRequestAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_RECORD_AUDIO_PERMISSION);
+        } else {
+            startVoiceRecognition();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Permission granted, you may speak", Toast.LENGTH_SHORT).show();
+                startVoiceRecognition();
+            } else {
+                Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
     private SpeechRecognizer speechRecognizer;
     private Intent speechRecognizerIntent;
     private boolean isListening = false;
@@ -614,34 +512,11 @@ public class AgentChatActivity extends AppCompatActivity {
         }
     }
 
-    private void checkAndRequestAudioPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.RECORD_AUDIO},
-                    REQUEST_RECORD_AUDIO_PERMISSION);
-        } else {
-            startVoiceRecognition();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Permission granted, you may speak", Toast.LENGTH_SHORT).show();
-                startVoiceRecognition();
-            } else {
-                Toast.makeText(this, "Need permission to record audio", Toast.LENGTH_LONG).show();
-            }
-        }
-    }
-
     private void stopVoiceAction() {
         isListening = false;
-        if (speechRecognizer != null) speechRecognizer.stopListening();
+        if (speechRecognizer != null) {
+            speechRecognizer.stopListening();
+        }
         btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
     }
 
@@ -653,10 +528,10 @@ public class AgentChatActivity extends AppCompatActivity {
             speechRecognizer.setRecognitionListener(new RecognitionListener() {
                 @Override
                 public void onResults(Bundle results) {
-                    ArrayList<String> matches =
-                            results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches != null && !matches.isEmpty()) {
-                        handleUserInput(matches.get(0));
+                        String spokenText = matches.get(0);
+                        handleUserInput(spokenText);
                         etInput.setText("");
                     }
                     stopVoiceAction();
@@ -666,7 +541,7 @@ public class AgentChatActivity extends AppCompatActivity {
                 public void onError(int error) {
                     stopVoiceAction();
                     if (error == SpeechRecognizer.ERROR_CLIENT) {
-                        setStatus("Voice engine is busy. Tap again.");
+                        setStatus("Voice engine is busy. tap again.");
                         if (speechRecognizer != null) {
                             speechRecognizer.destroy();
                             speechRecognizer = null;
@@ -685,16 +560,14 @@ public class AgentChatActivity extends AppCompatActivity {
                 @Override public void onEndOfSpeech() {
                     btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);
                     setStatus("Processing...");
-                }
-                @Override public void onPartialResults(Bundle partialResults) {}
+                }@Override public void onPartialResults(Bundle partialResults) {}
                 @Override public void onEvent(int eventType, Bundle params) {}
             });
         }
 
         if (speechRecognizerIntent == null) {
             speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
             speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
             speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         }
@@ -703,23 +576,5 @@ public class AgentChatActivity extends AppCompatActivity {
         btnVoice.setImageResource(android.R.drawable.ic_media_pause);
         setStatus("Listening...");
         speechRecognizer.startListening(speechRecognizerIntent);
-    }
-
-    private static class CustomLlmConfig {
-        final String name;
-        final String baseUrl;
-        final String model;
-        final String apiKey;
-
-        CustomLlmConfig(String name, String baseUrl, String model, String apiKey) {
-            this.name = name != null ? name.trim() : "Custom";
-            this.baseUrl = baseUrl != null ? baseUrl.trim() : "";
-            this.model = model != null ? model.trim() : "";
-            this.apiKey = apiKey != null ? apiKey.trim() : "";
-        }
-
-        boolean isComplete() {
-            return !baseUrl.isEmpty() && !model.isEmpty() && !apiKey.isEmpty();
-        }
     }
 }

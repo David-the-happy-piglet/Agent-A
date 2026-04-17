@@ -1,0 +1,545 @@
+Index: build.gradle.kts
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>// Top-level build file where you can add configuration options common to all sub-projects/modules.\nplugins {\n    alias(libs.plugins.android.application) apply false\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/build.gradle.kts b/build.gradle.kts
+--- a/build.gradle.kts	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/build.gradle.kts	(date 1773700582123)
+@@ -1,4 +1,5 @@
+ // Top-level build file where you can add configuration options common to all sub-projects/modules.
+ plugins {
+     alias(libs.plugins.android.application) apply false
+-}
+\ No newline at end of file
++}
++
+Index: app/build.gradle.kts
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import java.util.Properties\n\nplugins {\n    alias(libs.plugins.android.application)\n}\n\nandroid {\n    namespace = \"edu.northeastern.agent_a\"\n    compileSdk = 36\n\n    defaultConfig {\n        applicationId = \"edu.northeastern.agent_a\"\n        minSdk = 26\n        targetSdk = 36\n        versionCode = 1\n        versionName = \"1.0\"\n\n        testInstrumentationRunner = \"androidx.test.runner.AndroidJUnitRunner\"\n\n        val props = Properties()\n        props.load(rootProject.file(\"local.properties\").inputStream())\n        buildConfigField(\"String\", \"GEMINI_API_KEY\", \"\\\"${props[\"GEMINI_API_KEY\"]}\\\"\")\n    }\n\n    buildFeatures {\n        buildConfig = true\n    }\n\n    buildTypes {\n        release {\n            isMinifyEnabled = false\n            proguardFiles(\n                getDefaultProguardFile(\"proguard-android-optimize.txt\"),\n                \"proguard-rules.pro\"\n            )\n        }\n    }\n\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_11\n        targetCompatibility = JavaVersion.VERSION_11\n    }\n}\n\ndependencies {\n    implementation(libs.appcompat)\n    implementation(libs.material)\n    implementation(libs.activity)\n    implementation(libs.constraintlayout)\n    implementation(\"com.squareup.okhttp3:okhttp:4.12.0\")\n    implementation(libs.firebase.crashlytics.buildtools)\n    testImplementation(libs.junit)\n    androidTestImplementation(libs.ext.junit)\n    androidTestImplementation(libs.espresso.core)\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+--- a/app/build.gradle.kts	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/app/build.gradle.kts	(date 1773700236196)
+@@ -1,12 +1,21 @@
+-import java.util.Properties
+-
+ plugins {
+     alias(libs.plugins.android.application)
+ }
+ 
++import java.util.Properties
++
++val localProperties = Properties().apply {
++    val localPropertiesFile = rootProject.file("local.properties")
++    if (localPropertiesFile.exists()) {
++        localPropertiesFile.inputStream().use { load(it) }
++    }
++}
++
+ android {
+     namespace = "edu.northeastern.agent_a"
+-    compileSdk = 36
++    compileSdk {
++        version = release(36)
++    }
+ 
+     defaultConfig {
+         applicationId = "edu.northeastern.agent_a"
+@@ -17,13 +26,13 @@
+ 
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+ 
+-        val props = Properties()
+-        props.load(rootProject.file("local.properties").inputStream())
+-        buildConfigField("String", "GEMINI_API_KEY", "\"${props["GEMINI_API_KEY"]}\"")
+-    }
++        val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY", "")
++        val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimax.io/v1/text/chatcompletion_v2")
++        val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
+ 
+-    buildFeatures {
+-        buildConfig = true
++        buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
++        buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
++        buildConfigField("String", "MINIMAX_MODEL", "\"$minimaxModel\"")
+     }
+ 
+     buildTypes {
+@@ -35,11 +44,14 @@
+             )
+         }
+     }
+-
+     compileOptions {
+         sourceCompatibility = JavaVersion.VERSION_11
+         targetCompatibility = JavaVersion.VERSION_11
+     }
++
++    buildFeatures {
++        buildConfig = true
++    }
+ }
+ 
+ dependencies {
+@@ -47,8 +59,6 @@
+     implementation(libs.material)
+     implementation(libs.activity)
+     implementation(libs.constraintlayout)
+-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+-    implementation(libs.firebase.crashlytics.buildtools)
+     testImplementation(libs.junit)
+     androidTestImplementation(libs.ext.junit)
+     androidTestImplementation(libs.espresso.core)
+Index: app/src/main/java/edu/northeastern/agent_a/ui/AgentChatActivity.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package edu.northeastern.agent_a.ui;\n\nimport android.Manifest;\nimport android.content.Intent;\nimport android.content.pm.PackageManager;\nimport android.os.Bundle;\nimport android.speech.RecognitionListener;\nimport android.speech.RecognizerIntent;\nimport android.speech.SpeechRecognizer;\nimport android.util.Log;\nimport android.view.View;\nimport android.view.inputmethod.EditorInfo;\nimport android.widget.EditText;\nimport android.widget.ImageButton;\nimport android.widget.TextView;\nimport android.widget.Toast;\n\nimport androidx.activity.EdgeToEdge;\nimport androidx.activity.result.ActivityResultLauncher;\nimport androidx.activity.result.contract.ActivityResultContracts;\nimport androidx.annotation.NonNull;\nimport androidx.appcompat.app.AppCompatActivity;\nimport androidx.core.app.ActivityCompat;\nimport androidx.core.content.ContextCompat;\nimport androidx.core.graphics.Insets;\nimport androidx.core.view.ViewCompat;\nimport androidx.core.view.WindowInsetsCompat;\nimport androidx.recyclerview.widget.LinearLayoutManager;\nimport androidx.recyclerview.widget.RecyclerView;\n\nimport com.google.android.material.button.MaterialButton;\n\nimport java.util.ArrayList;\nimport java.util.List;\nimport java.util.Locale;\n\nimport edu.northeastern.agent_a.BuildConfig;\nimport edu.northeastern.agent_a.R;\nimport edu.northeastern.agent_a.core.agent.Executor;\nimport edu.northeastern.agent_a.core.agent.Planner;\nimport edu.northeastern.agent_a.core.agent.Policy;\nimport edu.northeastern.agent_a.core.memory.Message;\nimport edu.northeastern.agent_a.core.memory.SessionStore;\nimport edu.northeastern.agent_a.core.tools.ContactsLookupTool;\nimport edu.northeastern.agent_a.core.tools.EmailSummaryTool;\nimport edu.northeastern.agent_a.core.tools.MapsNavigateTool;\nimport edu.northeastern.agent_a.core.tools.PhoneDialTool;\nimport edu.northeastern.agent_a.core.tools.Plan;\nimport edu.northeastern.agent_a.core.tools.SmsComposeTool;\nimport edu.northeastern.agent_a.core.tools.ToolRegistry;\nimport edu.northeastern.agent_a.core.tools.ToolResult;\nimport edu.northeastern.agent_a.llm.GeminiLLMClient;\nimport edu.northeastern.agent_a.llm.MockLLMClient;\n\n\npublic class AgentChatActivity extends AppCompatActivity {\n\n    private RecyclerView rvMessages;\n    private EditText etInput;\n    private MaterialButton btnSend;\n    private TextView tvStatus;\n\n    private ImageButton btnVoice;\n\n\n    private ChatAdapter adapter;\n    private SessionStore sessionStore;\n    private Planner planner;\n    private Executor executor;\n    private Policy policy;\n\n    private Plan pendingPlan;\n    private String pendingRetryText;\n\n    private final ActivityResultLauncher<String> contactsPermissionLauncher =\n            registerForActivityResult(\n                    new ActivityResultContracts.RequestPermission(),\n                    granted -> {\n                        if (granted && pendingRetryText != null) {\n                            String retryText = pendingRetryText;\n                            pendingRetryText = null;\n                            addAssistant(\"Permission granted. Retrying...\");\n                            handleUserInput(retryText);\n                        } else if (!granted) {\n                            addAssistant(\"Permission denied. Please provide the phone number directly.\");\n                        }\n                    });\n\n    @Override\n    protected void onCreate(Bundle savedInstanceState) {\n        super.onCreate(savedInstanceState);\n        EdgeToEdge.enable(this);\n        setContentView(R.layout.activity_agent_chat);\n        initViews();\n        initAgent();\n        View inputArea = findViewById(R.id.etInput);\n        ViewCompat.setOnApplyWindowInsetsListener(inputArea, (v, insets) -> {\n            Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());\n            Insets imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime());\n\n            // 如果键盘弹出，使用键盘高度；如果没弹出，使用系统导航栏高度\n            int bottomPadding = Math.max(systemBars.bottom, imeInsets.bottom);\n            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), bottomPadding);\n\n            return WindowInsetsCompat.CONSUMED;\n        });\n\n\n\n        addAssistant(getString(R.string.welcome_message));\n    }\n\n    private void initViews() {\n        rvMessages = findViewById(R.id.rvMessages);\n        etInput = findViewById(R.id.etInput);\n        btnSend = findViewById(R.id.btnSend);\n        tvStatus = findViewById(R.id.tvStatus);\n        btnVoice=findViewById(R.id.btnVoice);\n        sessionStore = new SessionStore();\n        adapter = new ChatAdapter(sessionStore.getMessages());\n\n        LinearLayoutManager lm = new LinearLayoutManager(this);\n        lm.setStackFromEnd(true);\n        rvMessages.setLayoutManager(lm);\n        rvMessages.setAdapter(adapter);\n\n        btnSend.setOnClickListener(v -> onSendClicked());\n        btnVoice.setOnClickListener(v -> handleVoiceButtonClick());\n        etInput.setOnEditorActionListener((v, actionId, event) -> {\n            if (actionId == EditorInfo.IME_ACTION_SEND) {\n                onSendClicked();\n                return true;\n            }\n            return false;\n        });\n    }\n\n    private void initAgent() {\n        String apiKey = BuildConfig.GEMINI_API_KEY;\n        ToolRegistry registry = new ToolRegistry();\n        registry.register(new PhoneDialTool());\n        registry.register(new SmsComposeTool());\n        registry.register(new MapsNavigateTool());\n        registry.register(new ContactsLookupTool());\n        registry.register(new EmailSummaryTool());\n\n        planner = new Planner(new MockLLMClient(), registry);\n       // planner = new Planner(new GeminiLLMClient(apiKey), registry);\n        executor = new Executor(registry);\n        policy = new Policy();\n    }\n\n    private void onSendClicked() {\n        String text = etInput.getText().toString().trim();\n        if (text.isEmpty()) return;\n        etInput.setText(\"\");\n        handleUserInput(text);\n    }\n\n    private void handleUserInput(String text) {\n        addUser(text);\n        setStatus(getString(R.string.status_planning));\n\n        Plan plan = planner.createPlan(text, sessionStore);\n\n        if (!plan.hasActions()) {\n            addAssistant(plan.getAssistantMessage());\n            setStatus(getString(R.string.status_ready));\n            return;\n        }\n\n        setStatus(\"Planned \" + plan.getActions().size() + \" action(s). Awaiting confirmation…\");\n\n        if (policy.requiresPreview(plan)) {\n            pendingPlan = plan;\n            ActionPreviewHelper.show(this, plan, new ActionPreviewHelper.Callback() {\n                @Override\n                public void onConfirm() {\n                    addAssistant(plan.getAssistantMessage());\n                    executePlan(plan, text);\n                }\n\n                @Override\n                public void onCancel() {\n                    addAssistant(getString(R.string.cancelled));\n                    setStatus(getString(R.string.status_ready));\n                    pendingPlan = null;\n                }\n            });\n        } else {\n            addAssistant(plan.getAssistantMessage());\n            executePlan(plan, text);\n        }\n    }\n\n    private void executePlan(Plan plan, String originalUserText) {\n        List<ToolResult> results = executor.execute(this, plan);\n\n        for (int i = 0; i < results.size(); i++) {\n            ToolResult r = results.get(i);\n            String stepLabel = \"Step \" + (i + 1) + \"/\" + plan.getActions().size() + \": \";\n\n            switch (r.getStatus()) {\n                case SUCCESS:\n                    addAssistant(stepLabel + r.displayText());\n                    break;\n                case NEED_PERMISSION:\n                    addAssistant(stepLabel + r.displayText());\n                    pendingRetryText = originalUserText;\n                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);\n                    setStatus(getString(R.string.status_ready));\n                    return;\n                case FAIL:\n                default:\n                    addAssistant(stepLabel + \"Failed — \" + r.displayText());\n                    break;\n            }\n        }\n\n        setStatus(getString(R.string.status_ready));\n        pendingPlan = null;\n    }\n\n    private void addUser(String text) {\n        sessionStore.addMessage(new Message(Message.Role.USER, text));\n        notifyAndScroll();\n    }\n\n    private void addAssistant(String text) {\n        sessionStore.addMessage(new Message(Message.Role.ASSISTANT, text));\n        notifyAndScroll();\n    }\n\n    private void notifyAndScroll() {\n        adapter.notifyItemInserted(sessionStore.getMessages().size() - 1);\n        rvMessages.scrollToPosition(sessionStore.getMessages().size() - 1);\n    }\n\n    private void setStatus(String text) {\n        tvStatus.setText(text);\n    }\n\n    // 1. define record audio permission code\n    private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;\n\n    // 2. check and request audio permission\n    private void checkAndRequestAudioPermission() {\n        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)\n                != PackageManager.PERMISSION_GRANTED) {\n\n            // if no permission, ask from user\n            ActivityCompat.requestPermissions(this,\n                    new String[]{Manifest.permission.RECORD_AUDIO},\n                    REQUEST_RECORD_AUDIO_PERMISSION);\n        } else {\n            //if there's permission, start voice recognition\n            startVoiceRecognition();\n        }\n    }\n\n    // 3. handle user permission response\n    @Override\n    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {\n        super.onRequestPermissionsResult(requestCode, permissions, grantResults);\n        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {\n            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {\n                // User gave permission\n                Toast.makeText(this, \"Permission granted, you may speak\", Toast.LENGTH_SHORT).show();\n                startVoiceRecognition();\n            } else {\n                // User declined\n                Toast.makeText(this, \"Need permission to record audio\", Toast.LENGTH_LONG).show();\n            }\n        }\n    }\n\n\n    private SpeechRecognizer speechRecognizer;\n    private Intent speechRecognizerIntent;\n    private boolean isListening = false;\n    private void handleVoiceButtonClick() {\n        if (tvStatus.getText().toString().contains(\"busy\")) {\n            isListening = false;\n            if (speechRecognizer != null) {\n                speechRecognizer.destroy();\n                speechRecognizer = null;\n            }\n        }\n        if (!isListening) {\n            checkAndRequestAudioPermission();\n            isListening = true;\n            setStatus(\"Listening...\");\n            // 切换为“停止”图标 (这里使用系统自带的停止图标，你也可以换成自己的)\n            btnVoice.setImageResource(android.R.drawable.ic_media_pause);\n        } else {\n            stopVoiceAction();\n        }\n    }\n    private void stopVoiceAction() {\n        isListening = false;\n        if (speechRecognizer != null) {\n            speechRecognizer.stopListening();\n        }\n\n\n\n        btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);\n    }\n    private void startVoiceRecognition() {\n        if (speechRecognizer != null) {\n            speechRecognizer.cancel();\n        } else {\n            // 只有为空时才创建\n            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);\n            speechRecognizer.setRecognitionListener(new RecognitionListener() {\n                @Override\n                public void onResults(Bundle results) {\n\n                    ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);\n                    if (matches != null && !matches.isEmpty()) {\n                        String spokenText = matches.get(0);\n                        handleUserInput(spokenText);\n                        etInput.setText(\"\"); // 清空输入框\n                    }\n                    stopVoiceAction();\n                }\n\n                @Override\n                public void onError(int error) {\n                    stopVoiceAction();\n\n                    if (error == SpeechRecognizer.ERROR_CLIENT ) {\n                        setStatus(\"Voice engine is busy. tap again.\");\n                        if (speechRecognizer != null) {\n                            speechRecognizer.destroy();\n                            speechRecognizer = null;\n                        }\n                    } else if (error == 7) {\n                        setStatus(\"No match found. Try again.\");\n                    } else {\n                        setStatus(\"Error: \" + error + \". Tap again.\");\n                    }\n                }\n                @Override public void onReadyForSpeech(Bundle params) {}\n                @Override public void onBeginningOfSpeech() {}\n                @Override public void onRmsChanged(float rmsdB) {}\n                @Override public void onBufferReceived(byte[] buffer) {}\n                @Override public void onEndOfSpeech() {\n                    btnVoice.setImageResource(android.R.drawable.ic_btn_speak_now);\n                    setStatus(\"Processing...\");\n                }\n                @Override public void onPartialResults(Bundle partialResults) {}\n                @Override public void onEvent(int eventType, Bundle params) {}\n\n            });\n        }\n\n\n        if (speechRecognizerIntent == null) {\n            speechRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);\n            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);\n            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());\n\n            speechRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);\n        }\n\n        isListening = true;\n        btnVoice.setImageResource(android.R.drawable.ic_media_pause);\n        setStatus(\"Listening...\");\n        speechRecognizer.startListening(speechRecognizerIntent);\n    }\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/edu/northeastern/agent_a/ui/AgentChatActivity.java b/app/src/main/java/edu/northeastern/agent_a/ui/AgentChatActivity.java
+--- a/app/src/main/java/edu/northeastern/agent_a/ui/AgentChatActivity.java	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/app/src/main/java/edu/northeastern/agent_a/ui/AgentChatActivity.java	(date 1773438008448)
+@@ -44,6 +44,7 @@
+ import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
+ import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
+ import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
++import edu.northeastern.agent_a.core.tools.NewsFeedTool;
+ import edu.northeastern.agent_a.core.tools.PhoneDialTool;
+ import edu.northeastern.agent_a.core.tools.Plan;
+ import edu.northeastern.agent_a.core.tools.SmsComposeTool;
+Index: app/src/main/AndroidManifest.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    xmlns:tools=\"http://schemas.android.com/tools\">\n\n    <uses-permission android:name=\"android.permission.READ_CONTACTS\" />\n    <uses-permission android:name=\"android.permission.INTERNET\" />\n\n    <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />\n\n    <!-- Package visibility for Maps intent -->\n    <queries>\n        <package android:name=\"com.google.android.apps.maps\" />\n    </queries>\n\n    <uses-permission android:name=\"android.permission.INTERNET\"/>\n\n    <application\n        android:allowBackup=\"true\"\n        android:dataExtractionRules=\"@xml/data_extraction_rules\"\n        android:fullBackupContent=\"@xml/backup_rules\"\n        android:icon=\"@mipmap/ic_launcher\"\n        android:label=\"@string/app_name\"\n        android:roundIcon=\"@mipmap/ic_launcher_round\"\n        android:supportsRtl=\"true\"\n        android:theme=\"@style/Theme.AgentA\">\n\n        <activity\n            android:name=\".ui.AgentChatActivity\"\n            android:exported=\"true\"\n            android:windowSoftInputMode=\"adjustResize\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n\n\n    </application>\n\n</manifest>\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+--- a/app/src/main/AndroidManifest.xml	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/app/src/main/AndroidManifest.xml	(date 1773438651558)
+@@ -5,15 +5,11 @@
+     <uses-permission android:name="android.permission.READ_CONTACTS" />
+     <uses-permission android:name="android.permission.INTERNET" />
+ 
+-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+-
+     <!-- Package visibility for Maps intent -->
+     <queries>
+         <package android:name="com.google.android.apps.maps" />
+     </queries>
+ 
+-    <uses-permission android:name="android.permission.INTERNET"/>
+-
+     <application
+         android:allowBackup="true"
+         android:dataExtractionRules="@xml/data_extraction_rules"
+@@ -35,6 +31,8 @@
+         </activity>
+ 
+ 
++
++
+     </application>
+ 
+ </manifest>
+Index: app/src/main/java/edu/northeastern/agent_a/core/tools/NewsFeedTool.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package edu.northeastern.agent_a.core.tools;\n\nimport android.content.Context;\nimport android.util.Xml;\n\nimport org.xmlpull.v1.XmlPullParser;\nimport org.xmlpull.v1.XmlPullParserException;\n\nimport java.io.IOException;\nimport java.io.InputStream;\nimport java.net.HttpURLConnection;\nimport java.net.URL;\nimport java.util.ArrayList;\nimport java.util.Arrays;\nimport java.util.LinkedHashMap;\nimport java.util.List;\nimport java.util.Map;\n\n/**\n * Fetches real RSS headlines for a given category.\n *\n * Feed sources are taken from the TECH_FEEDS / FULL_FEEDS configuration.\n * Network I/O is blocking — caller must invoke execute() on a background thread.\n * (AgentChatActivity.executePlan() handles this via bgExecutor.)\n *\n * Supported categories: tech, ai, finance, politics\n */\npublic class NewsFeedTool implements Tool {\n\n    private static final int MAX_HEADLINES = 5;\n    private static final int CONNECT_TIMEOUT_MS = 8_000;\n    private static final int READ_TIMEOUT_MS = 8_000;\n\n    // Feed registry: category → list of { \"Source Name\", \"RSS URL\" }\n    // URLs taken directly from TECH_FEEDS / FULL_FEEDS in the RTF config file.\n    private static final Map<String, List<String[]>> FEEDS = new LinkedHashMap<>();\n\n    static {\n        // General top headlines — used when no specific category is requested\n        FEEDS.put(\"general\", Arrays.asList(\n                new String[]{\"BBC World\",      \"https://feeds.bbci.co.uk/news/world/rss.xml\"},\n                new String[]{\"AP News\",        \"https://news.google.com/rss/search?q=site:apnews.com&hl=en-US&gl=US&ceid=US:en\"},\n                new String[]{\"Reuters World\",  \"https://news.google.com/rss/search?q=site:reuters.com+world&hl=en-US&gl=US&ceid=US:en\"},\n                new String[]{\"NPR News\",       \"https://feeds.npr.org/1001/rss.xml\"},\n                new String[]{\"Guardian World\", \"https://www.theguardian.com/world/rss\"}\n        ));\n\n        FEEDS.put(\"tech\", Arrays.asList(\n                new String[]{\"TechCrunch\",     \"https://techcrunch.com/feed/\"},\n                new String[]{\"The Verge\",      \"https://www.theverge.com/rss/index.xml\"},\n                new String[]{\"Ars Technica\",   \"https://feeds.arstechnica.com/arstechnica/technology-lab\"},\n                new String[]{\"Hacker News\",    \"https://hnrss.org/frontpage\"},\n                new String[]{\"MIT Tech Review\",\"https://www.technologyreview.com/feed/\"}\n        ));\n\n        FEEDS.put(\"ai\", Arrays.asList(\n                new String[]{\"VentureBeat AI\", \"https://venturebeat.com/category/ai/feed/\"},\n                new String[]{\"The Verge AI\",   \"https://www.theverge.com/rss/ai-artificial-intelligence/index.xml\"},\n                new String[]{\"ArXiv AI\",       \"https://export.arxiv.org/rss/cs.AI\"},\n                new String[]{\"AI News\",        \"https://news.google.com/rss/search?q=(OpenAI+OR+Anthropic+OR+Google+AI+OR+ChatGPT)+when:2d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"finance\", Arrays.asList(\n                new String[]{\"CNBC\",           \"https://www.cnbc.com/id/100003114/device/rss/rss.html\"},\n                new String[]{\"Yahoo Finance\",  \"https://finance.yahoo.com/news/rssindex\"},\n                new String[]{\"Reuters Biz\",    \"https://news.google.com/rss/search?q=site:reuters.com+business+markets&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"politics\", Arrays.asList(\n                new String[]{\"BBC World\",      \"https://feeds.bbci.co.uk/news/world/rss.xml\"},\n                new String[]{\"NPR News\",       \"https://feeds.npr.org/1001/rss.xml\"},\n                new String[]{\"Guardian World\", \"https://www.theguardian.com/world/rss\"}\n        ));\n\n        FEEDS.put(\"crypto\", Arrays.asList(\n                new String[]{\"CoinDesk\",       \"https://www.coindesk.com/arc/outboundfeeds/rss/\"},\n                new String[]{\"Cointelegraph\",  \"https://cointelegraph.com/rss\"},\n                new String[]{\"Crypto News\",    \"https://news.google.com/rss/search?q=(bitcoin+OR+ethereum+OR+crypto+OR+%22digital+assets%22)+when:1d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"science\", Arrays.asList(\n                new String[]{\"MIT Research\",   \"https://news.mit.edu/rss/research\"},\n                new String[]{\"ArXiv ML\",       \"https://export.arxiv.org/rss/cs.LG\"},\n                new String[]{\"Science News\",   \"https://news.google.com/rss/search?q=(science+OR+research+OR+discovery+OR+study)+breakthrough+when:3d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"security\", Arrays.asList(\n                new String[]{\"Krebs Security\", \"https://krebsonsecurity.com/feed/\"},\n                new String[]{\"The Hacker News\",\"https://feeds.feedburner.com/TheHackersNews\"},\n                new String[]{\"Dark Reading\",   \"https://www.darkreading.com/rss.xml\"}\n        ));\n\n        FEEDS.put(\"startups\", Arrays.asList(\n                new String[]{\"TechCrunch\",     \"https://techcrunch.com/category/startups/feed/\"},\n                new String[]{\"VentureBeat\",    \"https://venturebeat.com/feed/\"},\n                new String[]{\"Crunchbase\",     \"https://news.crunchbase.com/feed/\"},\n                new String[]{\"VC News\",        \"https://news.google.com/rss/search?q=(%22Series+A%22+OR+%22Series+B%22+OR+%22funding+round%22+OR+%22venture+capital%22)+when:7d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"energy\", Arrays.asList(\n                new String[]{\"Oil & Gas\",      \"https://news.google.com/rss/search?q=(oil+price+OR+OPEC+OR+%22natural+gas%22+OR+%22crude+oil%22)+when:2d&hl=en-US&gl=US&ceid=US:en\"},\n                new String[]{\"Nuclear Energy\", \"https://news.google.com/rss/search?q=(%22nuclear+energy%22+OR+%22nuclear+power%22+OR+uranium)+when:3d&hl=en-US&gl=US&ceid=US:en\"},\n                new String[]{\"Reuters Energy\", \"https://news.google.com/rss/search?q=site:reuters.com+(oil+OR+gas+OR+energy+OR+OPEC)+when:3d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"asia\", Arrays.asList(\n                new String[]{\"BBC Asia\",       \"https://feeds.bbci.co.uk/news/world/asia/rss.xml\"},\n                new String[]{\"Reuters Asia\",   \"https://news.google.com/rss/search?q=site:reuters.com+(China+OR+Japan+OR+Taiwan+OR+Korea)+when:3d&hl=en-US&gl=US&ceid=US:en\"},\n                new String[]{\"CNA\",            \"https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml\"},\n                new String[]{\"Asia News\",      \"https://news.google.com/rss/search?q=(China+OR+Japan+OR+Korea+OR+India+OR+ASEAN)+when:2d&hl=en-US&gl=US&ceid=US:en\"}\n        ));\n\n        FEEDS.put(\"middleeast\", Arrays.asList(\n                new String[]{\"BBC Middle East\",\"https://feeds.bbci.co.uk/news/world/middle_east/rss.xml\"},\n                new String[]{\"Al Jazeera\",     \"https://www.aljazeera.com/xml/rss/all.xml\"},\n                new String[]{\"Guardian ME\",    \"https://www.theguardian.com/world/middleeast/rss\"}\n        ));\n    }\n\n    // ── Tool interface ────────────────────────────────────────────────────\n\n    @Override\n    public String name() { return \"news.fetch\"; }\n\n    @Override\n    public RiskLevel defaultRiskLevel() { return RiskLevel.LOW; }\n\n    @Override\n    public ToolSpec spec() {\n        LinkedHashMap<String, String> params = new LinkedHashMap<>();\n        params.put(\"category\", \"String — 'tech' | 'ai' | 'finance' | 'politics'\");\n        return new ToolSpec(\n                \"news.fetch\",\n                \"Fetches the latest news headlines for the requested category.\",\n                params,\n                RiskLevel.LOW);\n    }\n\n    /**\n     * Blocking network call — must be called from a background thread.\n     * Iterates feed sources in order, stops once MAX_HEADLINES is reached.\n     * If a source fails it is silently skipped so other sources still work.\n     */\n    @Override\n    public ToolResult execute(Context context, Map<String, String> args) {\n        String category = args.containsKey(\"category\")\n                ? args.get(\"category\").toLowerCase().trim()\n                : \"tech\";\n\n        List<String[]> sources = FEEDS.containsKey(category)\n                ? FEEDS.get(category)\n                : FEEDS.get(\"tech\");\n\n        List<String> headlines = new ArrayList<>();\n\n        for (String[] source : sources) {\n            if (headlines.size() >= MAX_HEADLINES) break;\n            String sourceName = source[0];\n            String feedUrl   = source[1];\n            try {\n                int remaining = MAX_HEADLINES - headlines.size();\n                List<String> items = fetchTitles(feedUrl, remaining);\n                for (String title : items) {\n                    headlines.add(\"[\" + sourceName + \"] \" + title);\n                }\n            } catch (Throwable ignored) {\n                // skip failing source (timeout, 403, parse error, etc.), try next one\n            }\n        }\n\n        if (headlines.isEmpty()) {\n            return ToolResult.fail(\"Could not fetch news. Please check your internet connection.\");\n        }\n\n        StringBuilder sb = new StringBuilder();\n        sb.append(categoryEmoji(category))\n          .append(\" \").append(capitalize(category)).append(\" Headlines:\\n\");\n        for (int i = 0; i < headlines.size(); i++) {\n            sb.append(i + 1).append(\". \").append(headlines.get(i)).append(\"\\n\");\n        }\n        return ToolResult.success(sb.toString().trim());\n    }\n\n    // ── RSS / Atom parser ─────────────────────────────────────────────────\n\n    /**\n     * Fetches up to {@code limit} article titles from an RSS or Atom feed URL.\n     * Uses Android's built-in XmlPullParser — no third-party XML library needed.\n     */\n    private List<String> fetchTitles(String feedUrl, int limit)\n            throws IOException, XmlPullParserException {\n\n        List<String> titles = new ArrayList<>();\n        HttpURLConnection conn = null;\n\n        try {\n            conn = (HttpURLConnection) new URL(feedUrl).openConnection();\n            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);\n            conn.setReadTimeout(READ_TIMEOUT_MS);\n            // Some feeds block default Java UA; a generic browser string avoids 403s\n            conn.setRequestProperty(\"User-Agent\",\n                    \"Mozilla/5.0 (compatible; AgentA/1.0; RSS reader)\");\n            conn.setRequestProperty(\"Accept\",\n                    \"application/rss+xml, application/atom+xml, application/xml, text/xml\");\n\n            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {\n                return titles;\n            }\n\n            InputStream in = conn.getInputStream();\n            XmlPullParser parser = Xml.newPullParser();\n            parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false);\n            parser.setInput(in, null); // encoding auto-detected from XML declaration\n\n            boolean insideItem  = false;\n            boolean nextIsTitle = false;\n\n            int eventType = parser.getEventType();\n            while (eventType != XmlPullParser.END_DOCUMENT) {\n                switch (eventType) {\n                    case XmlPullParser.START_TAG: {\n                        String tag = parser.getName();\n                        if (\"item\".equalsIgnoreCase(tag) || \"entry\".equalsIgnoreCase(tag)) {\n                            insideItem = true;\n                        } else if (insideItem && \"title\".equalsIgnoreCase(tag)) {\n                            nextIsTitle = true;\n                        }\n                        break;\n                    }\n                    case XmlPullParser.TEXT: {\n                        if (nextIsTitle) {\n                            String text = parser.getText().trim();\n                            if (!text.isEmpty()) {\n                                titles.add(text);\n                                if (titles.size() >= limit) return titles;\n                            }\n                            nextIsTitle = false;\n                        }\n                        break;\n                    }\n                    case XmlPullParser.END_TAG: {\n                        String tag = parser.getName();\n                        if (\"item\".equalsIgnoreCase(tag) || \"entry\".equalsIgnoreCase(tag)) {\n                            insideItem  = false;\n                            nextIsTitle = false;\n                        }\n                        break;\n                    }\n                }\n                eventType = parser.next();\n            }\n\n        } finally {\n            if (conn != null) conn.disconnect();\n        }\n\n        return titles;\n    }\n\n    // ── helpers ───────────────────────────────────────────────────────────\n\n    private String categoryEmoji(String category) {\n        switch (category) {\n            case \"general\":    return \"\uD83C\uDF10\";\n            case \"ai\":         return \"\uD83E\uDD16\";\n            case \"finance\":    return \"\uD83D\uDCB0\";\n            case \"politics\":   return \"\uD83C\uDFDB\uFE0F\";\n            case \"crypto\":     return \"₿\";\n            case \"science\":    return \"\uD83D\uDD2C\";\n            case \"security\":   return \"\uD83D\uDD10\";\n            case \"startups\":   return \"\uD83D\uDE80\";\n            case \"energy\":     return \"⚡\";\n            case \"asia\":       return \"\uD83C\uDF0F\";\n            case \"middleeast\": return \"\uD83C\uDF0D\";\n            default:           return \"\uD83D\uDCF1\";\n        }\n    }\n\n    private String capitalize(String s) {\n        if (s == null || s.isEmpty()) return s;\n        return Character.toUpperCase(s.charAt(0)) + s.substring(1);\n    }\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/edu/northeastern/agent_a/core/tools/NewsFeedTool.java b/app/src/main/java/edu/northeastern/agent_a/core/tools/NewsFeedTool.java
+--- a/app/src/main/java/edu/northeastern/agent_a/core/tools/NewsFeedTool.java	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/app/src/main/java/edu/northeastern/agent_a/core/tools/NewsFeedTool.java	(date 1773438530123)
+@@ -15,6 +15,8 @@
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.concurrent.Callable;
++import java.util.concurrent.FutureTask;
+ 
+ /**
+  * Fetches real RSS headlines for a given category.
+@@ -143,6 +145,23 @@
+      */
+     @Override
+     public ToolResult execute(Context context, Map<String, String> args) {
++        FutureTask<ToolResult> task = new FutureTask<>(new Callable<ToolResult>() {
++            @Override
++            public ToolResult call() {
++                return executeBlocking(args);
++            }
++        });
++
++        Thread worker = new Thread(task, "news-fetch-tool");
++        worker.start();
++        try {
++            return task.get();
++        } catch (Exception e) {
++            return ToolResult.fail("Could not fetch news: " + e.getMessage());
++        }
++    }
++
++    private ToolResult executeBlocking(Map<String, String> args) {
+         String category = args.containsKey("category")
+                 ? args.get("category").toLowerCase().trim()
+                 : "tech";
+Index: app/src/main/java/edu/northeastern/agent_a/llm/MiniMaxLLMClient.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/edu/northeastern/agent_a/llm/MiniMaxLLMClient.java b/app/src/main/java/edu/northeastern/agent_a/llm/MiniMaxLLMClient.java
+new file mode 100644
+--- /dev/null	(date 1773699774215)
++++ b/app/src/main/java/edu/northeastern/agent_a/llm/MiniMaxLLMClient.java	(date 1773699774215)
+@@ -0,0 +1,301 @@
++package edu.northeastern.agent_a.llm;
++
++import android.util.Log;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.io.BufferedReader;
++import java.io.InputStream;
++import java.io.InputStreamReader;
++import java.io.OutputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.nio.charset.StandardCharsets;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
++import edu.northeastern.agent_a.BuildConfig;
++import edu.northeastern.agent_a.core.tools.ActionSpec;
++import edu.northeastern.agent_a.core.tools.Plan;
++import edu.northeastern.agent_a.core.tools.RiskLevel;
++import edu.northeastern.agent_a.core.tools.Tool;
++import edu.northeastern.agent_a.core.tools.ToolRegistry;
++
++public class MiniMaxLLMClient implements LLMClient {
++
++    private static final String TAG = "MiniMaxLLMClient";
++    private static final int CONNECT_TIMEOUT_MS = 15000;
++    private static final int READ_TIMEOUT_MS = 30000;
++
++    private static final String HELP_MESSAGE =
++            "I can help you with calls, text messages, navigation, and email summaries. "
++                    + "Try: \"Call Mom\", \"Text John saying meet at 5\", "
++                    + "\"Navigate to Boston\", or \"Show my emails\".";
++
++
++    private static final String JSON_OUTPUT_REMINDER =
++            "\n\nReturn only one JSON object in this exact shape: "
++                    + "{\"message\":\"...\",\"steps\":[{\"tool\":\"...\",\"args\":{\"key\":\"value\"}}]}. "
++                    + "Never invent new tool names. If no tool is needed, return a normal conversational reply in "
++                    + "\"message\" and use an empty steps array. "
++
++                    + "Do not add markdown fences, examples, or explanation.";
++
++    private final ToolRegistry registry;
++    private final String apiKey;
++    private final String baseUrl;
++    private final String model;
++
++    public MiniMaxLLMClient(ToolRegistry registry) {
++        this(registry, BuildConfig.MINIMAX_API_KEY, BuildConfig.MINIMAX_BASE_URL, BuildConfig.MINIMAX_MODEL);
++    }
++
++    public MiniMaxLLMClient(ToolRegistry registry, String apiKey, String baseUrl, String model) {
++        this.registry = registry;
++        this.apiKey = apiKey != null ? apiKey.trim() : "";
++        this.baseUrl = (baseUrl == null || baseUrl.trim().isEmpty())
++                ? "https://api.minimax.io/v1/text/chatcompletion_v2"
++                : baseUrl.trim();
++        this.model = (model == null || model.trim().isEmpty())
++                ? "M2-her"
++                : model.trim();
++    }
++
++    @Override
++    public Plan call(LLMRequest request) {
++        if (apiKey.isEmpty()) {
++            throw new IllegalStateException("MiniMax API key is missing. Add MINIMAX_API_KEY to local.properties.");
++        }
++
++        HttpURLConnection connection = null;
++        try {
++            URL url = new URL(baseUrl);
++            connection = (HttpURLConnection) url.openConnection();
++            connection.setRequestMethod("POST");
++            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
++            connection.setReadTimeout(READ_TIMEOUT_MS);
++            connection.setDoOutput(true);
++            connection.setRequestProperty("Authorization", "Bearer " + apiKey);
++            connection.setRequestProperty("Content-Type", "application/json");
++
++            byte[] body = buildRequestBody(request).getBytes(StandardCharsets.UTF_8);
++            try (OutputStream os = connection.getOutputStream()) {
++                os.write(body);
++            }
++
++            int statusCode = connection.getResponseCode();
++            String responseText = readFully(statusCode >= 400
++                    ? connection.getErrorStream()
++                    : connection.getInputStream());
++
++            if (statusCode >= 400) {
++                throw new IllegalStateException(parseErrorMessage(responseText, statusCode));
++            }
++
++            return parsePlan(responseText);
++        } catch (Exception e) {
++            Log.e(TAG, "MiniMax request failed", e);
++            throw new IllegalStateException("MiniMax request failed: " + e.getMessage(), e);
++        } finally {
++            if (connection != null) {
++                connection.disconnect();
++            }
++        }
++    }
++
++    private String buildRequestBody(LLMRequest request) throws JSONException {
++        JSONObject body = new JSONObject();
++        body.put("model", model);
++        body.put("temperature", 0);
++
++        JSONArray messages = new JSONArray();
++        messages.put(new JSONObject()
++                .put("role", "system")
++                .put("name", "MiniMax AI")
++                .put("content", request.getSystemPrompt() + JSON_OUTPUT_REMINDER));
++        messages.put(new JSONObject()
++                .put("role", "user")
++                .put("name", "User")
++                .put("content", request.getUserQuery() + JSON_OUTPUT_REMINDER));
++        body.put("messages", messages);
++        return body.toString();
++    }
++
++    private Plan parsePlan(String responseText) throws JSONException {
++        JSONObject response = new JSONObject(responseText);
++        JSONArray choices = response.optJSONArray("choices");
++        if (choices == null || choices.length() == 0) {
++            throw new IllegalStateException("MiniMax returned no choices.");
++        }
++
++        JSONObject firstChoice = choices.getJSONObject(0);
++        JSONObject message = firstChoice.optJSONObject("message");
++        if (message == null) {
++            throw new IllegalStateException("MiniMax returned no message content.");
++        }
++
++        String content = message.optString("content", "").trim();
++        if (content.isEmpty()) {
++            throw new IllegalStateException("MiniMax returned empty message content.");
++        }
++
++        JSONObject planJson;
++        try {
++            planJson = parseStructuredContent(content);
++        } catch (JSONException e) {
++
++            Log.w(TAG, "MiniMax returned non-JSON content, falling back to plain text: " + content);
++            return new Plan(Collections.emptyList(), content);
++        }
++
++        String assistantMessage = planJson.optString("message", "");
++        int originalStepCount = 0;
++        JSONArray stepsJson = planJson.optJSONArray("steps");
++        if (stepsJson == null) {
++            stepsJson = new JSONArray();
++        } else {
++            originalStepCount = stepsJson.length();
++
++        }
++
++        List<ActionSpec> steps = new ArrayList<>();
++        for (int i = 0; i < stepsJson.length(); i++) {
++            JSONObject step = stepsJson.getJSONObject(i);
++            String toolName = step.optString("tool", "").trim();
++            if (toolName.isEmpty() || !registry.has(toolName)) {
++
++                Log.w(TAG, "Ignoring unsupported tool from model: " + toolName);
++
++                continue;
++            }
++
++            Map<String, String> args = new HashMap<>();
++            JSONObject argsObject = step.optJSONObject("args");
++            if (argsObject != null) {
++                Iterator<String> keys = argsObject.keys();
++                while (keys.hasNext()) {
++                    String key = keys.next();
++                    args.put(key, String.valueOf(argsObject.opt(key)));
++                }
++            }
++
++            steps.add(new ActionSpec(
++                    toolName,
++                    args,
++                    riskFor(toolName),
++                    humanDescription(toolName, args)));
++        }
++
++        if (assistantMessage.isEmpty()) {
++            assistantMessage = steps.isEmpty()
++
++                    ? HELP_MESSAGE
++                    : "Here's the plan:";
++        }
++
++
++        if (steps.isEmpty() && originalStepCount > 0 && assistantMessage.equals(content)) {
++            assistantMessage = "I can't perform that action in this app yet, but I can still chat about it.";
++
++        }
++
++        return new Plan(steps, assistantMessage);
++    }
++
++    private JSONObject parseStructuredContent(String content) throws JSONException {
++        String trimmed = content.trim();
++        if (trimmed.startsWith("```")) {
++            trimmed = trimmed
++                    .replaceFirst("^```(?:json)?\\s*", "")
++                    .replaceFirst("\\s*```$", "")
++                    .trim();
++        }
++
++        try {
++            return new JSONObject(trimmed);
++        } catch (JSONException objectError) {
++            try {
++                JSONArray array = new JSONArray(trimmed);
++                return new JSONObject().put("message", "Here's the plan:").put("steps", array);
++            } catch (JSONException arrayError) {
++                int firstObject = trimmed.indexOf('{');
++                int lastObject = trimmed.lastIndexOf('}');
++                if (firstObject >= 0 && lastObject > firstObject) {
++                    return new JSONObject(trimmed.substring(firstObject, lastObject + 1));
++                }
++
++                int firstArray = trimmed.indexOf('[');
++                int lastArray = trimmed.lastIndexOf(']');
++                if (firstArray >= 0 && lastArray > firstArray) {
++                    JSONArray array = new JSONArray(trimmed.substring(firstArray, lastArray + 1));
++                    return new JSONObject().put("message", "Here's the plan:").put("steps", array);
++                }
++
++                throw objectError;
++            }
++        }
++    }
++
++    private RiskLevel riskFor(String toolName) {
++        Tool tool = registry.get(toolName);
++        return tool != null ? tool.defaultRiskLevel() : RiskLevel.LOW;
++    }
++
++    private String humanDescription(String toolName, Map<String, String> args) {
++        if (args.isEmpty()) {
++            return toolName + "()";
++        }
++
++        List<String> keys = new ArrayList<>(args.keySet());
++        Collections.sort(keys);
++        StringBuilder sb = new StringBuilder(toolName).append("(");
++        for (int i = 0; i < keys.size(); i++) {
++            if (i > 0) {
++                sb.append(", ");
++            }
++            String key = keys.get(i);
++            sb.append(key).append("=\"").append(args.get(key)).append("\"");
++        }
++        sb.append(")");
++        return sb.toString();
++    }
++
++    private String parseErrorMessage(String responseText, int statusCode) {
++        try {
++            JSONObject root = new JSONObject(responseText);
++            JSONObject error = root.optJSONObject("error");
++            if (error != null) {
++                String message = error.optString("message");
++                if (!message.isEmpty()) {
++                    return "MiniMax API error (" + statusCode + "): " + message;
++                }
++            }
++        } catch (JSONException ignored) {
++            // Fall back to raw text below.
++        }
++
++        return "MiniMax API error (" + statusCode + "): " + responseText;
++    }
++
++    private String readFully(InputStream inputStream) throws Exception {
++        if (inputStream == null) {
++            return "";
++        }
++
++        StringBuilder sb = new StringBuilder();
++        try (BufferedReader reader = new BufferedReader(
++                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
++            String line;
++            while ((line = reader.readLine()) != null) {
++                sb.append(line);
++            }
++        }
++        return sb.toString();
++    }
++}
+Index: app/src/main/java/edu/northeastern/agent_a/core/agent/PromptBuilder.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>package edu.northeastern.agent_a.core.agent;\n\nimport java.util.List;\n\nimport edu.northeastern.agent_a.core.memory.Message;\nimport edu.northeastern.agent_a.core.memory.SessionStore;\nimport edu.northeastern.agent_a.core.tools.ToolSpec;\nimport edu.northeastern.agent_a.llm.LLMRequest;\n\n/**\n * Constructs the full prompt that is sent to the LLM on every call.\n * The prompt contains: system instructions, available tool signatures,\n * conversation history, and the current user query.\n */\npublic class PromptBuilder {\n\n    private static final String SYSTEM_INSTRUCTIONS =\n            \"You are an AI agent running on an Android phone.\\n\"\n                    + \"Plan the user's request using ONLY the tools listed below.\\n\"\n                    + \"Return a JSON array of steps. Each step is:\\n\"\n                    + \"  {\\\"tool\\\": \\\"<tool_name>\\\", \\\"args\\\": {\\\"<key>\\\": \\\"<value>\\\", ...}}\\n\"\n                    + \"If a step needs output from a previous step (e.g. a phone number from contacts.lookup), \"\n                    + \"use \\\"[from_lookup]\\\" as the placeholder value.\\n\"\n                    + \"If the request is unclear or unsupported, return an empty array \"\n                    + \"and include a \\\"message\\\" field explaining what you can do.\\n\";\n\n    public LLMRequest build(String userQuery, SessionStore session,\n                            List<ToolSpec> toolSpecs) {\n        StringBuilder prompt = new StringBuilder();\n\n        // 1. System instructions\n        prompt.append(\"=== SYSTEM ===\\n\");\n        prompt.append(SYSTEM_INSTRUCTIONS).append(\"\\n\");\n\n        // 2. Available tools (function signatures)\n        prompt.append(\"=== AVAILABLE TOOLS ===\\n\");\n        for (int i = 0; i < toolSpecs.size(); i++) {\n            prompt.append(i + 1).append(\". \")\n                    .append(toolSpecs.get(i).toPromptString()).append(\"\\n\");\n        }\n\n        // 3. Conversation history\n        List<Message> messages = session.getMessages();\n        if (!messages.isEmpty()) {\n            prompt.append(\"=== CONVERSATION HISTORY ===\\n\");\n            for (Message msg : messages) {\n                prompt.append(msg.getRole().name()).append(\": \")\n                        .append(msg.getText()).append(\"\\n\");\n            }\n            prompt.append(\"\\n\");\n        }\n\n        return new LLMRequest(prompt.toString(), userQuery);\n    }\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/edu/northeastern/agent_a/core/agent/PromptBuilder.java b/app/src/main/java/edu/northeastern/agent_a/core/agent/PromptBuilder.java
+--- a/app/src/main/java/edu/northeastern/agent_a/core/agent/PromptBuilder.java	(revision dc040a8269f10266fe2c092d4c5c28d774860c37)
++++ b/app/src/main/java/edu/northeastern/agent_a/core/agent/PromptBuilder.java	(date 1773438008447)
+@@ -16,13 +16,26 @@
+ 
+     private static final String SYSTEM_INSTRUCTIONS =
+             "You are an AI agent running on an Android phone.\n"
++<<<<<<< HEAD
+                     + "Plan the user's request using ONLY the tools listed below.\n"
+-                    + "Return a JSON array of steps. Each step is:\n"
++=======
++                    + "If the user asks for an actionable phone task, plan it using ONLY the tools listed below.\n"
++                    + "If the user is asking a general question or chatting, reply conversationally and use no tools.\n"
++>>>>>>> test
++                    + "Return STRICT JSON only with this shape:\n"
++                    + "  {\"message\":\"<short assistant reply>\",\"steps\":[{\"tool\":\"<tool_name>\",\"args\":{\"<key>\":\"<value>\"}}]}\n"
++                    + "Each step object must use the form:\n"
+                     + "  {\"tool\": \"<tool_name>\", \"args\": {\"<key>\": \"<value>\", ...}}\n"
+                     + "If a step needs output from a previous step (e.g. a phone number from contacts.lookup), "
+                     + "use \"[from_lookup]\" as the placeholder value.\n"
+-                    + "If the request is unclear or unsupported, return an empty array "
+-                    + "and include a \"message\" field explaining what you can do.\n";
++<<<<<<< HEAD
++                    + "If the request is unclear or unsupported, return an empty steps array "
++                    + "and include a helpful message.\n"
++=======
++                    + "Never invent tools that are not listed below.\n"
++                    + "If no available tool fits the request, return an empty steps array and put your normal reply in \"message\".\n"
++>>>>>>> test
++                    + "Do not wrap the JSON in markdown fences or add any extra commentary.\n";
+ 
+     public LLMRequest build(String userQuery, SessionStore session,
+                             List<ToolSpec> toolSpecs) {
