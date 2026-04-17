@@ -27,11 +27,22 @@ import edu.northeastern.agent_a.core.tools.RiskLevel;
 import edu.northeastern.agent_a.core.tools.Tool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 
+/**
+ * MiniMaxLLMClient sends the prompt to the MiniMax API and parses the response into a Plan.
+ *
+ * Key differences from GeminiLLMClient:
+ *   - Uses HttpURLConnection instead of OkHttp
+ *   - Auth uses "Authorization: Bearer key" header instead of x-goog-api-key
+ *   - JSON output is guided through a text reminder added to the prompt
+ *   - Filters out tool names not in the registry to guard against model hallucination
+ */
 public class MiniMaxLLMClient implements LLMClient {
 
     private static final String TAG = "MiniMaxLLMClient";
     private static final int CONNECT_TIMEOUT_MS = 15000;
-    private static final int READ_TIMEOUT_MS = 30000;
+    private static final int READ_TIMEOUT_MS    = 30000;
+
+    // Added to both system and user messages to guide the model's output format
     private static final String JSON_OUTPUT_REMINDER =
             "\n\nReturn only one JSON object in this exact shape: "
                     + "{\"message\":\"...\",\"steps\":[{\"tool\":\"...\",\"args\":{\"key\":\"value\"}}]}. "
@@ -45,25 +56,48 @@ public class MiniMaxLLMClient implements LLMClient {
     private final String baseUrl;
     private final String model;
 
+    // ── Constructors ──────────────────────────────────────────────────────
+
+    /**
+     * Constructor used when credentials come from BuildConfig (local.properties).
+     *
+     * @param registry used to validate tool names and look up risk levels
+     */
     public MiniMaxLLMClient(ToolRegistry registry) {
         this(registry, BuildConfig.MINIMAX_API_KEY, BuildConfig.MINIMAX_BASE_URL, BuildConfig.MINIMAX_MODEL);
     }
 
+    /**
+     * Constructor used when credentials are passed directly (e.g. hardcoded in Activity).
+     *
+     * @param registry used to validate tool names and look up risk levels
+     * @param apiKey   the MiniMax API key
+     * @param baseUrl  the API endpoint URL; defaults to the standard MiniMax URL if empty
+     * @param model    the model name; defaults to "M2-her" if empty
+     */
     public MiniMaxLLMClient(ToolRegistry registry, String apiKey, String baseUrl, String model) {
         this.registry = registry;
-        this.apiKey = apiKey != null ? apiKey.trim() : "";
-        this.baseUrl = (baseUrl == null || baseUrl.trim().isEmpty())
+        this.apiKey   = apiKey != null ? apiKey.trim() : "";
+        this.baseUrl  = (baseUrl == null || baseUrl.trim().isEmpty())
                 ? "https://api.minimax.io/v1/text/chatcompletion_v2"
                 : baseUrl.trim();
-        this.model = (model == null || model.trim().isEmpty())
-                ? "M2-her"
-                : model.trim();
+        this.model    = (model == null || model.trim().isEmpty()) ? "M2-her" : model.trim();
     }
 
+    // ── HTTP request ──────────────────────────────────────────────────────
+
+    /**
+     * Sends the request to MiniMax using HttpURLConnection.
+     * On HTTP error (4xx/5xx), reads the error stream and throws with a clear message.
+     * Connect and read timeouts prevent the call from hanging on a slow network.
+     *
+     * @param request contains the system prompt and the user query
+     * @return a Plan with actions, or throws IllegalStateException on failure
+     */
     @Override
     public Plan call(LLMRequest request) {
         if (apiKey.isEmpty()) {
-            throw new IllegalStateException("MiniMax API key is missing. Add MINIMAX_API_KEY to local.properties.");
+            throw new IllegalStateException("MiniMax API key is missing.");
         }
 
         HttpURLConnection connection = null;
@@ -96,12 +130,20 @@ public class MiniMaxLLMClient implements LLMClient {
             Log.e(TAG, "MiniMax request failed", e);
             throw new IllegalStateException("MiniMax request failed: " + e.getMessage(), e);
         } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+            if (connection != null) connection.disconnect();
         }
     }
 
+    // ── Request building ──────────────────────────────────────────────────
+
+    /**
+     * Builds the JSON request body.
+     * JSON_OUTPUT_REMINDER is appended to both messages to guide the model
+     * to always return the expected JSON format.
+     *
+     * @param request the prompt containing system instructions and user query
+     * @return a JSON string ready to send as the request body
+     */
     private String buildRequestBody(LLMRequest request) throws JSONException {
         JSONObject body = new JSONObject();
         body.put("model", model);
@@ -120,6 +162,16 @@ public class MiniMaxLLMClient implements LLMClient {
         return body.toString();
     }
 
+    // ── Response parsing ──────────────────────────────────────────────────
+
+    /**
+     * Parses the MiniMax response into a Plan.
+     * Filters out any tool names not found in the registry (hallucination guard).
+     * Falls back to a plain-text Plan if the response is not valid JSON.
+     *
+     * @param responseText the raw JSON string from MiniMax
+     * @return a Plan with the parsed actions
+     */
     private Plan parsePlan(String responseText) throws JSONException {
         JSONObject response = new JSONObject(responseText);
         JSONArray choices = response.optJSONArray("choices");
@@ -127,22 +179,17 @@ public class MiniMaxLLMClient implements LLMClient {
             throw new IllegalStateException("MiniMax returned no choices.");
         }
 
-        JSONObject firstChoice = choices.getJSONObject(0);
-        JSONObject message = firstChoice.optJSONObject("message");
-        if (message == null) {
-            throw new IllegalStateException("MiniMax returned no message content.");
-        }
+        JSONObject message = choices.getJSONObject(0).optJSONObject("message");
+        if (message == null) throw new IllegalStateException("MiniMax returned no message.");
 
         String content = message.optString("content", "").trim();
-        if (content.isEmpty()) {
-            throw new IllegalStateException("MiniMax returned empty message content.");
-        }
+        if (content.isEmpty()) throw new IllegalStateException("MiniMax returned empty content.");
 
         JSONObject planJson;
         try {
             planJson = parseStructuredContent(content);
         } catch (JSONException e) {
-            Log.w(TAG, "MiniMax returned non-JSON content, falling back to plain text: " + content);
+            Log.w(TAG, "Non-JSON content, treating as plain text: " + content);
             return new Plan(Collections.emptyList(), content);
         }
 
@@ -160,7 +207,7 @@ public class MiniMaxLLMClient implements LLMClient {
             JSONObject step = stepsJson.getJSONObject(i);
             String toolName = step.optString("tool", "").trim();
             if (toolName.isEmpty() || !registry.has(toolName)) {
-                Log.w(TAG, "Ignoring unsupported tool from model: " + toolName);
+                Log.w(TAG, "Ignoring unknown tool name: " + toolName);
                 continue;
             }
 
@@ -174,19 +221,13 @@ public class MiniMaxLLMClient implements LLMClient {
                 }
             }
 
-            steps.add(new ActionSpec(
-                    toolName,
-                    args,
-                    riskFor(toolName),
+            steps.add(new ActionSpec(toolName, args, riskFor(toolName),
                     humanDescription(toolName, args)));
         }
 
         if (assistantMessage.isEmpty()) {
-            assistantMessage = steps.isEmpty()
-                    ? content
-                    : "Here's the plan:";
+            assistantMessage = steps.isEmpty() ? content : "Here's the plan:";
         }
-
         if (steps.isEmpty() && originalStepCount > 0 && assistantMessage.equals(content)) {
             assistantMessage = "I can't perform that action in this app yet, but I can still chat about it.";
         }
@@ -194,6 +235,13 @@ public class MiniMaxLLMClient implements LLMClient {
         return new Plan(steps, assistantMessage);
     }
 
+    /**
+     * Extracts a valid JSON object from raw model text.
+     * Handles markdown code fences, bare arrays, and extra text around the JSON.
+     *
+     * @param content the raw text returned by the model
+     * @return a JSONObject containing "message" and "steps" fields
+     */
     private JSONObject parseStructuredContent(String content) throws JSONException {
         String trimmed = content.trim();
         if (trimmed.startsWith("```")) {
@@ -202,7 +250,6 @@ public class MiniMaxLLMClient implements LLMClient {
                     .replaceFirst("\\s*```$", "")
                     .trim();
         }
-
         try {
             return new JSONObject(trimmed);
         } catch (JSONException objectError) {
@@ -211,45 +258,52 @@ public class MiniMaxLLMClient implements LLMClient {
                 return new JSONObject().put("message", "Here's the plan:").put("steps", array);
             } catch (JSONException arrayError) {
                 int firstObject = trimmed.indexOf('{');
-                int lastObject = trimmed.lastIndexOf('}');
+                int lastObject  = trimmed.lastIndexOf('}');
                 if (firstObject >= 0 && lastObject > firstObject) {
                     return new JSONObject(trimmed.substring(firstObject, lastObject + 1));
                 }
-
                 int firstArray = trimmed.indexOf('[');
-                int lastArray = trimmed.lastIndexOf(']');
+                int lastArray  = trimmed.lastIndexOf(']');
                 if (firstArray >= 0 && lastArray > firstArray) {
                     JSONArray array = new JSONArray(trimmed.substring(firstArray, lastArray + 1));
                     return new JSONObject().put("message", "Here's the plan:").put("steps", array);
                 }
-
                 throw objectError;
             }
         }
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Looks up the tool's default risk level from the registry.
+     *
+     * @param toolName the tool name as returned by the model
+     * @return the tool's RiskLevel, or LOW if the tool is not found
+     */
     private RiskLevel riskFor(String toolName) {
         Tool tool = registry.get(toolName);
         return tool != null ? tool.defaultRiskLevel() : RiskLevel.LOW;
     }
 
+    /**
+     * Builds a readable description string, e.g. sms.compose(body="hi", phone="123").
+     *
+     * @param toolName the tool name
+     * @param args     the arguments map
+     * @return a human-readable string shown in the ActionPreviewHelper dialog
+     */
     private String humanDescription(String toolName, Map<String, String> args) {
-        if (args.isEmpty()) {
-            return toolName + "()";
-        }
-
+        if (args.isEmpty()) return toolName + "()";
         List<String> keys = new ArrayList<>(args.keySet());
         Collections.sort(keys);
         StringBuilder sb = new StringBuilder(toolName).append("(");
         for (int i = 0; i < keys.size(); i++) {
-            if (i > 0) {
-                sb.append(", ");
-            }
+            if (i > 0) sb.append(", ");
             String key = keys.get(i);
             sb.append(key).append("=\"").append(args.get(key)).append("\"");
         }
-        sb.append(")");
-        return sb.toString();
+        return sb.append(")").toString();
     }
 
     private String parseErrorMessage(String responseText, int statusCode) {
@@ -257,30 +311,20 @@ public class MiniMaxLLMClient implements LLMClient {
             JSONObject root = new JSONObject(responseText);
             JSONObject error = root.optJSONObject("error");
             if (error != null) {
-                String message = error.optString("message");
-                if (!message.isEmpty()) {
-                    return "MiniMax API error (" + statusCode + "): " + message;
-                }
+                String msg = error.optString("message");
+                if (!msg.isEmpty()) return "MiniMax API error (" + statusCode + "): " + msg;
             }
-        } catch (JSONException ignored) {
-            // Fall back to raw text below.
-        }
-
+        } catch (JSONException ignored) {}
         return "MiniMax API error (" + statusCode + "): " + responseText;
     }
 
     private String readFully(InputStream inputStream) throws Exception {
-        if (inputStream == null) {
-            return "";
-        }
-
+        if (inputStream == null) return "";
         StringBuilder sb = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
+            while ((line = reader.readLine()) != null) sb.append(line);
         }
         return sb.toString();
     }
