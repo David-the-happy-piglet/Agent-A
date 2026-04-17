@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     namespace = "edu.northeastern.agent_a"
     compileSdk = 36
@@ -17,9 +24,14 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val props = Properties()
-        props.load(rootProject.file("local.properties").inputStream())
-        buildConfigField("String", "GEMINI_API_KEY", "\"${props["GEMINI_API_KEY"]}\"")
+        val minimaxApiKey = localProperties.getProperty("MINIMAX_API_KEY", "")
+        val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimax.io/v1/text/chatcompletion_v2")
+        val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
+
+        buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
+        buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
+        buildConfigField("String", "MINIMAX_MODEL", "\"$minimaxModel\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
     }
 
     buildFeatures {
@@ -48,7 +60,7 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.constraintlayout)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation(libs.firebase.crashlytics.buildtools)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)

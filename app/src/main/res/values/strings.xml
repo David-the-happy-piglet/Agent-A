@@ -9,5 +9,5 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="cancelled">Cancelled.</string>
-    <string name="welcome_message">Hi! I\'m Agent-A. I can make calls, send texts, navigate, and check your emails. What would you like to do?</string>
+    <string name="welcome_message">Hi! I\'m Agent-A. I can make calls, send texts, navigate, check email/news/weather, control Spotify, share recent media, and check app capabilities. What would you like to do?</string>
 </resources>
