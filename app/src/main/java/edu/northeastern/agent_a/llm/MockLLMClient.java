@@ -263,19 +263,10 @@ public class MockLLMClient implements LLMClient {
     }
 
     private Plan planWeather(String userText) {
-        String location = extractAfterKeywords(userText,
-                "weather in", "weather for", "forecast in", "forecast for",
-                "\u5929\u6c14\u5728", "\u5929\u6c14");
-        if (location == null) {
-            location = userText
-                    .replaceAll("(?i)weather|forecast|how is the weather|what is the weather like", "")
-                    .replace("\u5929\u6c14\u5982\u4f55", "")
-                    .replace("\u5929\u6c14", "")
-                    .trim();
-        }
+        String location = extractWeatherLocation(userText);
 
         Map<String, String> args = new HashMap<>();
-        args.put("location", location != null ? location : "");
+        args.put("location", location);
         return new Plan(
                 stepsOf(step("weather.lookup", args, RiskLevel.LOW,
                         "weather.lookup(location=\"" + args.get("location") + "\")")),
@@ -366,6 +357,34 @@ public class MockLLMClient implements LLMClient {
         Matcher m = SPOTIFY_URI_PATTERN.matcher(text);
         if (m.find()) return m.group(1);
         return null;
+    }
+
+    private String extractWeatherLocation(String text) {
+        String location = extractAfterKeywords(text,
+                "weather in", "weather for", "forecast in", "forecast for",
+                "weather at", "weather near", "in", "for", "at", "near",
+                "\u5929\u6c14\u5728", "\u5929\u6c14");
+        if (location == null) {
+            location = text;
+        }
+
+        location = location
+                .replaceAll("(?i)\\b(what|how|is|the|weather|forecast|like|today|now|currently|outside|please|tell|me|about)\\b", " ")
+                .replaceAll("(?i)\\b(what's|hows|how's)\\b", " ")
+                .replace("\u4eca\u5929", " ")
+                .replace("\u4eca\u65e5", " ")
+                .replace("\u73b0\u5728", " ")
+                .replace("\u5929\u6c14", " ")
+                .replace("\u5982\u4f55", " ")
+                .replace("\u600e\u4e48\u6837", " ")
+                .replaceAll("[?？,，。.!！]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        if (location.matches("(?i)^(today|now|current|currently)$")) {
+            return "";
+        }
+        return location;
     }
 
     private String extractAfterKeywords(String text, String... keywords) {
