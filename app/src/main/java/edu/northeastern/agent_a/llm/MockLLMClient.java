@@ -28,6 +28,8 @@ public class MockLLMClient implements LLMClient {
 
     private static final Pattern PHONE_PATTERN =
             Pattern.compile("(\\+?\\d[\\d\\s\\-()]{5,}\\d)");
+    private static final Pattern SPOTIFY_URI_PATTERN =
+            Pattern.compile("(spotify:(?:track|album|playlist):[A-Za-z0-9]+)", Pattern.CASE_INSENSITIVE);
 
     private static final String HELP_TEXT =
             "I can help you with:\n"
@@ -234,12 +236,19 @@ public class MockLLMClient implements LLMClient {
                 "play", "search spotify for", "search", "find", "spotify",
                 "\u64ad\u653e", "\u641c\u7d22", "\u68c0\u7d22");
         if (query != null) {
-            query = query.replaceFirst("(?i)^(music|song|for|on spotify|in spotify)\\s+", "").trim();
+            query = query
+                    .replaceFirst("(?i)^(music|song|for|on spotify|in spotify)\\s+", "")
+                    .replaceFirst("(?i)\\s+(on|in)\\s+spotify$", "")
+                    .replaceFirst("(?i)\\s+spotify$", "")
+                    .trim();
         }
 
         Map<String, String> args = new HashMap<>();
         args.put("action", action);
-        if (query != null && !query.isEmpty()
+        String spotifyUri = extractSpotifyUri(userText);
+        if (spotifyUri != null) {
+            args.put("uri", spotifyUri);
+        } else if (query != null && !query.isEmpty()
                 && !matchesAny(action, "pause", "next", "previous")) {
             args.put("query", query);
         }
@@ -248,6 +257,7 @@ public class MockLLMClient implements LLMClient {
                 stepsOf(step("spotify.control", args, RiskLevel.MEDIUM,
                         "spotify.control(action=\"" + action + "\""
                                 + (args.containsKey("query") ? ", query=\"" + args.get("query") + "\"" : "")
+                                + (args.containsKey("uri") ? ", uri=\"" + args.get("uri") + "\"" : "")
                                 + ")")),
                 "I'll control Spotify:");
     }
@@ -349,6 +359,12 @@ public class MockLLMClient implements LLMClient {
     private String extractPhone(String text) {
         Matcher m = PHONE_PATTERN.matcher(text);
         if (m.find()) return m.group(1).replaceAll("[\\s()]", "");
+        return null;
+    }
+
+    private String extractSpotifyUri(String text) {
+        Matcher m = SPOTIFY_URI_PATTERN.matcher(text);
+        if (m.find()) return m.group(1);
         return null;
     }
 

@@ -26,24 +26,66 @@ public class SpotifyControlTool implements Tool {
     public ToolSpec spec() {
         LinkedHashMap<String, String> params = new LinkedHashMap<>();
         params.put("action", "String — 'search' | 'play' | 'pause' | 'toggle' | 'next' | 'previous'");
-        params.put("query", "String — song, artist, album, or playlist to search/play");
+        params.put("query", "String — song, artist, album, or playlist to search");
         params.put("uri", "String — optional spotify: URI to open directly");
         return new ToolSpec(
                 "spotify.control",
-                "Controls Spotify. Can open Spotify search/results, open a spotify: URI, or send media play/pause/next/previous commands to the active media session.",
+                "Controls Spotify. Can open Spotify search/results, open a spotify: URI, or send media play/pause/next/previous commands to the active media session. Android intents cannot autoplay an arbitrary search query; use a Spotify URI or resume current playback for automatic play.",
                 params,
                 RiskLevel.MEDIUM);
     }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {
-        if (!isSpotifyInstalled(context)) {
-            return ToolResult.fail("Spotify is not installed on this device.");
-        }
-
         String action = args.getOrDefault("action", "search").toLowerCase(Locale.US).trim();
         String query = args.getOrDefault("query", "").trim();
         String uri = args.getOrDefault("uri", "").trim();
+
+        SpotifyAuthManager authManager = new SpotifyAuthManager();
+        if (authManager.isConfigured() && !"search".equals(action)) {
+            try {
+                String token = authManager.getAccessToken(context);
+                if (token.isEmpty()) {
+                    authManager.startAuthorization(context, args);
+                    return ToolResult.success("Opened Spotify authorization. After you approve it, Agent-A will return here and retry this Spotify command.");
+                }
+
+                SpotifyWebApiClient webApi = new SpotifyWebApiClient(context, authManager);
+                switch (action) {
+                    case "play":
+                        if (!uri.isEmpty()) {
+                            return ToolResult.success(webApi.playUri(uri));
+                        }
+                        if (!query.isEmpty()) {
+                            return ToolResult.success(webApi.playQuery(query));
+                        }
+                        return ToolResult.success(webApi.resume());
+
+                    case "pause":
+                    case "stop":
+                        return ToolResult.success(webApi.pause());
+
+                    case "next":
+                        return ToolResult.success(webApi.next());
+
+                    case "previous":
+                        return ToolResult.success(webApi.previous());
+
+                    case "toggle":
+                    case "play_pause":
+                        return ToolResult.success("Spotify Web API does not expose a true toggle. Say \"pause Spotify\" or \"play Spotify\".");
+
+                    default:
+                        return ToolResult.fail("Unsupported Spotify action: " + action);
+                }
+            } catch (Exception e) {
+                return ToolResult.fail("Spotify Web API failed: " + e.getMessage());
+            }
+        }
+
+        if (!isSpotifyInstalled(context)) {
+            return ToolResult.fail("Spotify is not installed on this device. Add SPOTIFY_CLIENT_ID to local.properties to control Spotify Connect devices with Web API.");
+        }
 
         try {
             switch (action) {
@@ -57,13 +99,18 @@ public class SpotifyControlTool implements Tool {
                 case "play":
                     if (!uri.isEmpty()) {
                         openSpotifyUri(context, Uri.parse(uri));
-                        return ToolResult.success("Opened Spotify item.");
+                        waitForSpotifyToOpen();
+                        sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY);
+                        return ToolResult.success("Opened Spotify item and sent a play command.");
                     }
                     if (!query.isEmpty()) {
                         openSpotifyUri(context, Uri.parse("spotify:search:" + Uri.encode(query)));
-                        sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY);
-                        return ToolResult.success("Opened Spotify search for \"" + query + "\" and sent a play command.");
+                        return ToolResult.success("Opened Spotify search for \"" + query + "\". "
+                                + "Spotify does not allow this app to automatically pick and play a search result through Android intents. "
+                                + "To autoplay a specific item, pass a spotify: track/album/playlist URI or use Spotify Web API/App Remote with user authorization.");
                     }
+                    openSpotifyHome(context);
+                    waitForSpotifyToOpen();
                     sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY);
                     return ToolResult.success("Sent play command to Spotify/current media session.");
 
@@ -130,5 +177,13 @@ public class SpotifyControlTool implements Tool {
         KeyEvent up = new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0);
         audioManager.dispatchMediaKeyEvent(down);
         audioManager.dispatchMediaKeyEvent(up);
+    }
+
+    private void waitForSpotifyToOpen() {
+        try {
+            Thread.sleep(700);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
@@ -61,6 +62,7 @@ import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
+import edu.northeastern.agent_a.core.tools.SpotifyAuthManager;
 import edu.northeastern.agent_a.core.tools.SpotifyControlTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
@@ -181,6 +183,14 @@ public class AgentChatActivity extends AppCompatActivity {
         });
 
         addAssistant(getString(R.string.welcome_message));
+        handleSpotifyRedirect(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleSpotifyRedirect(intent);
     }
 
     @Override
@@ -241,6 +251,47 @@ public class AgentChatActivity extends AppCompatActivity {
         planner  = new Planner(new MockLLMClient(), registry);
         executor = new Executor(registry);
         policy   = new Policy();
+    }
+
+    private void handleSpotifyRedirect(Intent intent) {
+        Uri data = intent != null ? intent.getData() : null;
+        SpotifyAuthManager authManager = new SpotifyAuthManager();
+        if (!authManager.canHandleRedirect(data)) {
+            return;
+        }
+
+        setInputEnabled(false);
+        setStatus("Connecting Spotify...");
+        bgExecutor.execute(() -> {
+            try {
+                String authMessage = authManager.handleRedirect(this, data);
+                Map<String, String> pendingArgs = authManager.consumePendingCommand(this);
+                if (pendingArgs.isEmpty()) {
+                    runOnUiThread(() -> {
+                        addAssistant(authMessage);
+                        setStatus(getString(R.string.status_ready));
+                        setInputEnabled(true);
+                    });
+                    return;
+                }
+
+                ToolResult retryResult = new SpotifyControlTool().execute(this, pendingArgs);
+                runOnUiThread(() -> {
+                    addAssistant(authMessage);
+                    addAssistant(retryResult.getStatus() == ToolResult.Status.SUCCESS
+                            ? "✅ Spotify: " + retryResult.displayText()
+                            : "❌ Spotify: " + retryResult.displayText());
+                    setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    addAssistant("Spotify authorization failed: " + e.getMessage());
+                    setStatus(getString(R.string.status_ready));
+                    setInputEnabled(true);
+                });
+            }
+        });
     }
 
     // ═════════════════════════════════════════════════════════════════════

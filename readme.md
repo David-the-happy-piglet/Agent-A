@@ -57,7 +57,7 @@ Navigate to Boston	Opens Google Maps navigation
 去星巴克 / 导航到机场	Chinese navigation commands
 Show my emails / 收件箱	Returns today's cached Gmail notification list, or opens Notification Access setup
 拨打 555-1234 / 发短信	Chinese call/SMS commands
-Play Taylor Swift on Spotify / 暂停播放	Opens Spotify search or sends media play/pause
+Play Taylor Swift on Spotify / 暂停播放	Uses Spotify Web API to search/play after OAuth; falls back to Spotify app/media controls if not configured
 Send my latest photo to John / 把最近拍摄的照片发给John	Looks up John, finds latest MediaStore photo, opens share/MMS compose
 Weather in Boston / 天气如何	Fetches current weather; empty location uses approximate network/IP location
 Can this phone execute Spotify commands? / 手机里有哪些app	Lists apps or checks whether commands are feasible
@@ -74,8 +74,27 @@ The LLM spinner now includes "Custom LLM". Selecting it opens a dialog for:
 The config is stored locally in SharedPreferences and is hot-swapped into Planner without restarting the app.
 
 
+Spotify Web API
+Set these in local.properties:
+- SPOTIFY_CLIENT_ID=your_spotify_dashboard_client_id
+- SPOTIFY_REDIRECT_URI=agenta://spotify-auth
+
+The Spotify Dashboard Redirect URI must exactly match agenta://spotify-auth.
+
+First Spotify playback command opens Spotify OAuth with PKCE. After approval, Android returns to Agent-A through the agenta://spotify-auth deep link, stores access/refresh tokens locally, and retries the pending Spotify command.
+
+Supported Web API commands:
+- play <query>: searches Spotify tracks and starts the first match
+- play <spotify:track|album|playlist URI>: starts that item
+- pause Spotify
+- next song
+- previous song
+
+Playback requires Spotify Premium and an active Spotify playback device. If Spotify reports NO_ACTIVE_DEVICE, open Spotify once or start playback on any Spotify Connect device, then retry.
+
+
 Android safety notes
 - Media/file sending cannot silently send files. The app finds accessible recent media and opens Android share/MMS compose so the user confirms the final send.
 - Recent media lookup requires READ_MEDIA_IMAGES / READ_MEDIA_VIDEO on Android 13+, or READ_EXTERNAL_STORAGE on older versions.
-- Spotify playback controls use Spotify deep links plus Android media-key events; pause/play works best after Spotify has an active media session.
+- Spotify Web API controls a Spotify playback device; it does not provide audio streams for Agent-A to play by itself.
 - Gmail inbox contents are not directly readable by this prototype. Email listing uses Gmail notification snippets captured after the user enables "Agent-A Gmail Email Capture" in Android Notification Access settings.
