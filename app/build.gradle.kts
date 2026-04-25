@@ -28,12 +28,16 @@ android {
         val minimaxBaseUrl = localProperties.getProperty("MINIMAX_BASE_URL", "https://api.minimax.io/v1/text/chatcompletion_v2")
         val minimaxModel = localProperties.getProperty("MINIMAX_MODEL", "M2-her")
         val googleClientId = localProperties.getProperty("GOOGLE_CLIENT_ID", "")
+        val spotifyClientId = localProperties.getProperty("SPOTIFY_CLIENT_ID", "")
+        val spotifyRedirectUri = localProperties.getProperty("SPOTIFY_REDIRECT_URI", "agenta://spotify-auth")
 
         buildConfigField("String", "MINIMAX_API_KEY", "\"$minimaxApiKey\"")
         buildConfigField("String", "MINIMAX_BASE_URL", "\"$minimaxBaseUrl\"")
         buildConfigField("String", "MINIMAX_MODEL", "\"$minimaxModel\"")
         buildConfigField("String", "GEMINI_API_KEY", "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"")
         buildConfigField("String", "GOOGLE_CLIENT_ID", "\"$googleClientId\"")
+        buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"$spotifyClientId\"")
+        buildConfigField("String", "SPOTIFY_REDIRECT_URI", "\"$spotifyRedirectUri\"")
     }
 
     buildFeatures {
