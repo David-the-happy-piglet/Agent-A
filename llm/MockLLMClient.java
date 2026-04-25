@@ -50,34 +50,27 @@ public class MockLLMClient implements LLMClient {
         if (matchesAny(lower, "navigate", "directions")) {
             return planNavigation(userText);
         }
-        
-        // EMAIL LOGIC REFINED:
-        if (matchesAny(lower, "email", "mail")) {
-            // Priority 1: Check for composition keywords
-            if (matchesAny(lower, "compose", "send", "draft", "write")) {
-                // Return a basic plan for email composition instead of yielding an empty plan
-                return planEmailCompose(userText);
-            }
-            // Priority 2: Check for reading keywords
-            if (matchesAny(lower, "inbox", "summary", "check", "what's in", "read")) {
+        // KEY FIX: Only trigger email.summary for reading requests.
+        // If it contains "send", "compose", or "draft", we skip and let fallback handle it.
+        if (matchesAny(lower, "email", "mail") && !matchesAny(lower, "send", "compose", "draft", "write")) {
+            if (matchesAny(lower, "inbox", "summary", "check", "what's in")) {
                 return planEmailSummary();
             }
         }
-        
         if (matchesAny(lower, "news", "headlines")) {
             return planNews(userText);
         }
 
-        // Return help text instead of an empty string to avoid empty bubbles
-        return new Plan(Collections.emptyList(), HELP_TEXT);
+        // If no match, return empty plan to trigger fallback in AgentChatActivity
+        return new Plan(Collections.emptyList(), "");
     }
 
     private Plan planCall(String userText) {
         String phone = extractPhone(userText);
         if (phone != null) {
-            return new Plan(stepsOf(step("phone.dial", argsOf("phone", phone), RiskLevel.LOW, "Opening dialer")), "Calling " + phone + "...");
+            return new Plan(stepsOf(step("phone.dial", argsOf("phone", phone), RiskLevel.LOW, "phone.dial")), "Opening dialer...");
         }
-        return new Plan(Collections.emptyList(), "I couldn't find a phone number in your request. Please specify one.");
+        return new Plan(Collections.emptyList(), "");
     }
 
     private Plan planSms(String userText) {
@@ -85,40 +78,27 @@ public class MockLLMClient implements LLMClient {
         String name = extractSmsRecipientName(userText);
         if (name != null) {
             List<ActionSpec> actions = new ArrayList<>();
-            actions.add(step("contacts.lookup", argsOf("name", name), RiskLevel.MEDIUM, "Looking up " + name));
-            actions.add(step("sms.compose", argsOf("phone", "[from_lookup]", "body", body), RiskLevel.MEDIUM, "Preparing SMS"));
-            return new Plan(actions, "Composing text to " + name + "...");
+            actions.add(step("contacts.lookup", argsOf("name", name), RiskLevel.MEDIUM, "Looking up contact"));
+            actions.add(step("sms.compose", argsOf("phone", "[from_lookup]", "body", body), RiskLevel.MEDIUM, "Composing SMS"));
+            return new Plan(actions, "Preparing to send text...");
         }
-        return new Plan(Collections.emptyList(), "Who would you like to text?");
+        return new Plan(Collections.emptyList(), "");
     }
 
     private Plan planNavigation(String userText) {
         String dest = extractAfterKeywords(userText, "navigate to", "navigate", "directions to");
         if (dest != null) {
-            return new Plan(stepsOf(step("maps.navigate", argsOf("destination", dest), RiskLevel.LOW, "Opening Maps")), "Navigating to " + dest + "...");
+            return new Plan(stepsOf(step("maps.navigate", argsOf("destination", dest), RiskLevel.LOW, "Starting navigation")), "Navigating...");
         }
-        return new Plan(Collections.emptyList(), "Where would you like to go?");
+        return new Plan(Collections.emptyList(), "");
     }
 
     private Plan planEmailSummary() {
-        return new Plan(stepsOf(step("email.summary", argsOf(), RiskLevel.MEDIUM, "Summarizing Inbox")), "Fetching your latest emails...");
-    }
-
-    private Plan planEmailCompose(String userText) {
-        String recipient = extractEmailRecipient(userText);
-        String subject = extractAfterKeywords(userText, "subject", "about");
-        if (subject == null) subject = "Draft from Agent-A";
-        
-        Map<String, String> args = new HashMap<>();
-        args.put("recipient", recipient != null ? recipient : "");
-        args.put("subject", subject);
-        args.put("body", "Sent via Agent-A.");
-
-        return new Plan(stepsOf(step("gmail.compose", args, RiskLevel.MEDIUM, "Opening Gmail")), "Opening Gmail compose...");
+        return new Plan(stepsOf(step("email.summary", argsOf(), RiskLevel.MEDIUM, "Summarizing emails")), "Fetching your inbox summary...");
     }
 
     private Plan planNews(String userText) {
-        return new Plan(stepsOf(step("news.fetch", argsOf("category", "general"), RiskLevel.LOW, "Fetching News")), "Checking the headlines...");
+        return new Plan(stepsOf(step("news.fetch", argsOf("category", "general"), RiskLevel.LOW, "Fetching news")), "Here is the news:");
     }
 
     private boolean matchesAny(String text, String... keywords) {
@@ -140,19 +120,6 @@ public class MockLLMClient implements LLMClient {
             int idx = lower.indexOf(kw.toLowerCase());
             if (idx >= 0) {
                 return text.substring(idx + kw.length()).trim();
-            }
-        }
-        return null;
-    }
-
-    private String extractEmailRecipient(String text) {
-        String[] keywords = {"to ", "email "};
-        for (String kw : keywords) {
-            int idx = text.toLowerCase().indexOf(kw);
-            if (idx >= 0) {
-                String after = text.substring(idx + kw.length()).trim();
-                String firstWord = after.split("\\s+")[0];
-                if (firstWord.contains("@")) return firstWord;
             }
         }
         return null;

@@ -1,7 +1,9 @@
 package edu.northeastern.agent_a.core.memory;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SessionStore {
 
@@ -9,6 +11,9 @@ public class SessionStore {
 
     private final List<Message> messages = new ArrayList<>();
     private String lastPlanSummary = "";
+    private String lastToolOutput = "None";
+    private int remainingCompoundCommands = 0;
+    private final Map<String, String> userPreferences = new HashMap<>();
 
     public void addMessage(Message msg) {
         messages.add(msg);
@@ -28,6 +33,15 @@ public class SessionStore {
     public void setLastPlanSummary(String summary) {
         this.lastPlanSummary = summary;
     }
+
+    public String getLastToolOutput() { return lastToolOutput; }
+    public void setLastToolOutput(String output) { this.lastToolOutput = output; }
+
+    public int getRemainingCompoundCommands() { return remainingCompoundCommands; }
+    public void setRemainingCompoundCommands(int count) { this.remainingCompoundCommands = count; }
+
+    public Map<String, String> getUserPreferences() { return userPreferences; }
+    public void addUserPreference(String key, String value) { userPreferences.put(key, value); }
 
     private void compress() {
         int halfSize = messages.size() / 2;

@@ -2,7 +2,6 @@ package edu.northeastern.agent_a.core.tools;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
 import android.util.Log;
 
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
@@ -15,7 +14,7 @@ import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.gmail.Gmail;
 import com.google.api.services.gmail.model.ListMessagesResponse;
-import com.google.api.services.gmail.model.Message;
+import com.google.api.services.gmail.model.MessagePartHeader;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -41,32 +40,36 @@ public class EmailSummaryTool implements Tool {
     @Override
     public ToolSpec spec() {
         return new ToolSpec(name(),
-                "Summarizes today's latest 10 Gmail emails using OAuth2. Requires user login.",
+                "Fetches and summarizes the last 10 emails from your Gmail inbox.",
                 new LinkedHashMap<>(), RiskLevel.MEDIUM);
     }
 
     @Override
     public ToolResult execute(Context context, Map<String, String> args) {
         GoogleSignInAccount account = GoogleSignIn.getLastSignedInAccount(context);
-
+        
         if (account == null || !GoogleSignIn.hasPermissions(account, new Scope(GMAIL_SCOPE))) {
             requestLogin(context);
             return ToolResult.needPermission("Please sign in with your Google account to read emails.");
         }
 
         try {
-            List<String> snippets = fetchEmailSnippets(context, account);
-            if (snippets.isEmpty()) {
-                return ToolResult.success("No emails found from today.");
+            List<String> summaries = fetchEmailSummaries(context, account);
+            if (summaries.isEmpty()) {
+                return ToolResult.success("No emails found in your inbox.");
             }
 
-            String combinedText = String.join("\n---\n", snippets);
-            // We return the raw snippets. The Planner/Executor flow in AgentChatActivity
-            // should handle the LLM summarization since this tool returns ToolResult to the Executor.
-            return ToolResult.success("Fetched " + snippets.size() + " email snippets:\n" + combinedText);
+            StringBuilder result = new StringBuilder("Here are your last 10 emails:\n\n");
+            for (int i = 0; i < summaries.size(); i++) {
+                result.append(i + 1).append(". ").append(summaries.get(i)).append("\n\n");
+            }
+            return ToolResult.success(result.toString());
 
         } catch (IOException e) {
             Log.e(TAG, "Gmail API error", e);
+            if (e.getMessage() != null && e.getMessage().contains("403")) {
+                 return ToolResult.fail("Gmail API Access Denied. Please ensure the Gmail API is enabled in the Google Cloud Console.");
+            }
             return ToolResult.fail("Failed to fetch emails: " + e.getMessage());
         }
     }
@@ -75,17 +78,23 @@ public class EmailSummaryTool implements Tool {
         if (!(context instanceof Activity)) return;
         Activity activity = (Activity) context;
 
-        GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        GoogleSignInOptions.Builder builder = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-                .requestScopes(new Scope(GMAIL_SCOPE))
-                .requestIdToken(BuildConfig.GOOGLE_CLIENT_ID)
-                .build();
+                .requestScopes(new Scope(GMAIL_SCOPE));
 
+        if (BuildConfig.GOOGLE_CLIENT_ID != null && !BuildConfig.GOOGLE_CLIENT_ID.isEmpty()) {
+            builder.requestIdToken(BuildConfig.GOOGLE_CLIENT_ID);
+        }
+
+        GoogleSignInOptions gso = builder.build();
         GoogleSignInClient client = GoogleSignIn.getClient(activity, gso);
-        activity.startActivityForResult(client.getSignInIntent(), RC_SIGN_IN);
+        
+        client.signOut().addOnCompleteListener(task -> {
+            activity.startActivityForResult(client.getSignInIntent(), RC_SIGN_IN);
+        });
     }
 
-    private List<String> fetchEmailSnippets(Context context, GoogleSignInAccount account) throws IOException {
+    private List<String> fetchEmailSummaries(Context context, GoogleSignInAccount account) throws IOException {
         GoogleAccountCredential credential = GoogleAccountCredential.usingOAuth2(
                 context, Collections.singleton(GMAIL_SCOPE));
         credential.setSelectedAccount(account.getAccount());
@@ -97,21 +106,36 @@ public class EmailSummaryTool implements Tool {
                 .setApplicationName("Agent-A")
                 .build();
 
-        // Query for today's messages (simplified)
+        // Fetch last 10 messages from Inbox
         ListMessagesResponse response = service.users().messages().list("me")
                 .setMaxResults(10L)
-                .setQ("newer_than:1d")
+                .setQ("label:INBOX")
                 .execute();
 
-        List<Message> messages = response.getMessages();
-        List<String> snippets = new ArrayList<>();
+        List<com.google.api.services.gmail.model.Message> messages = response.getMessages();
+        List<String> summaries = new ArrayList<>();
 
         if (messages != null) {
-            for (Message msg : messages) {
-                Message fullMsg = service.users().messages().get("me", msg.getId()).execute();
-                snippets.add(fullMsg.getSnippet());
+            for (com.google.api.services.gmail.model.Message msg : messages) {
+                com.google.api.services.gmail.model.Message fullMsg = 
+                        service.users().messages().get("me", msg.getId()).execute();
+                
+                String subject = "No Subject";
+                String from = "Unknown Sender";
+                
+                List<MessagePartHeader> headers = fullMsg.getPayload().getHeaders();
+                for (MessagePartHeader header : headers) {
+                    if ("Subject".equalsIgnoreCase(header.getName())) {
+                        subject = header.getValue();
+                    } else if ("From".equalsIgnoreCase(header.getName())) {
+                        from = header.getValue();
+                    }
+                }
+
+                String snippet = fullMsg.getSnippet();
+                summaries.add("**From:** " + from + "\n**Subject:** " + subject + "\n**Snippet:** " + snippet);
             }
         }
-        return snippets;
+        return summaries;
     }
 }

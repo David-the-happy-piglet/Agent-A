@@ -32,13 +32,6 @@ public class MiniMaxLLMClient implements LLMClient {
     private static final String TAG = "MiniMaxLLMClient";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
-    private static final String JSON_OUTPUT_REMINDER =
-            "\n\nReturn only one JSON object in this exact shape: "
-                    + "{\"message\":\"...\",\"steps\":[{\"tool\":\"...\",\"args\":{\"key\":\"value\"}}]}. "
-                    + "Use tool steps whenever the request matches an available tool, including news.fetch for news requests. "
-                    + "Never invent tool names that are not listed. "
-                    + "If no tool is needed, return a normal conversational reply in \"message\" and use an empty steps array. "
-                    + "Do not add markdown fences, examples, or explanation.";
 
     private final ToolRegistry registry;
     private final String apiKey;
@@ -63,7 +56,7 @@ public class MiniMaxLLMClient implements LLMClient {
     @Override
     public Plan call(LLMRequest request) {
         if (apiKey.isEmpty()) {
-            throw new IllegalStateException("MiniMax API key is missing. Add MINIMAX_API_KEY to local.properties.");
+            throw new IllegalStateException("MiniMax API key is missing.");
         }
 
         HttpURLConnection connection = null;
@@ -88,13 +81,13 @@ public class MiniMaxLLMClient implements LLMClient {
                     : connection.getInputStream());
 
             if (statusCode >= 400) {
-                throw new IllegalStateException(parseErrorMessage(responseText, statusCode));
+                throw new IllegalStateException("API Error " + statusCode + ": " + responseText);
             }
 
             return parsePlan(responseText);
         } catch (Exception e) {
             Log.e(TAG, "MiniMax request failed", e);
-            throw new IllegalStateException("MiniMax request failed: " + e.getMessage(), e);
+            return new Plan(Collections.emptyList(), "I'm having trouble connecting to my brain. Error: " + e.getMessage());
         } finally {
             if (connection != null) {
                 connection.disconnect();
@@ -105,17 +98,19 @@ public class MiniMaxLLMClient implements LLMClient {
     private String buildRequestBody(LLMRequest request) throws JSONException {
         JSONObject body = new JSONObject();
         body.put("model", model);
-        body.put("temperature", 0);
+        body.put("temperature", 0.01);
 
         JSONArray messages = new JSONArray();
         messages.put(new JSONObject()
                 .put("role", "system")
-                .put("name", "MiniMax AI")
-                .put("content", request.getSystemPrompt() + JSON_OUTPUT_REMINDER));
+                .put("name", "Agent-A")
+                .put("content", request.getSystemPrompt()));
+        
         messages.put(new JSONObject()
                 .put("role", "user")
                 .put("name", "User")
-                .put("content", request.getUserQuery() + JSON_OUTPUT_REMINDER));
+                .put("content", request.getUserQuery()));
+                
         body.put("messages", messages);
         return body.toString();
     }
@@ -124,163 +119,74 @@ public class MiniMaxLLMClient implements LLMClient {
         JSONObject response = new JSONObject(responseText);
         JSONArray choices = response.optJSONArray("choices");
         if (choices == null || choices.length() == 0) {
-            throw new IllegalStateException("MiniMax returned no choices.");
+            return new Plan(Collections.emptyList(), "MiniMax returned no response choices.");
         }
 
-        JSONObject firstChoice = choices.getJSONObject(0);
-        JSONObject message = firstChoice.optJSONObject("message");
-        if (message == null) {
-            throw new IllegalStateException("MiniMax returned no message content.");
-        }
+        String content = choices.getJSONObject(0).getJSONObject("message").optString("content", "").trim();
+        Log.d(TAG, "Raw Content: " + content);
 
-        String content = message.optString("content", "").trim();
         if (content.isEmpty()) {
-            throw new IllegalStateException("MiniMax returned empty message content.");
+            return new Plan(Collections.emptyList(), "I'm sorry, I couldn't generate a plan for that request.");
         }
 
-        JSONObject planJson;
+        JSONArray stepsJson = null;
+        String assistantMessage = "Planning complete.";
+        
         try {
-            planJson = parseStructuredContent(content);
-        } catch (JSONException e) {
-            Log.w(TAG, "MiniMax returned non-JSON content, falling back to plain text: " + content);
-            return new Plan(Collections.emptyList(), content);
-        }
-
-        String assistantMessage = planJson.optString("message", "");
-        int originalStepCount = 0;
-        JSONArray stepsJson = planJson.optJSONArray("steps");
-        if (stepsJson == null) {
-            stepsJson = new JSONArray();
-        } else {
-            originalStepCount = stepsJson.length();
-        }
-
-        List<ActionSpec> steps = new ArrayList<>();
-        for (int i = 0; i < stepsJson.length(); i++) {
-            JSONObject step = stepsJson.getJSONObject(i);
-            String toolName = step.optString("tool", "").trim();
-            if (toolName.isEmpty() || !registry.has(toolName)) {
-                Log.w(TAG, "Ignoring unsupported tool from model: " + toolName);
-                continue;
+            String cleaned = content;
+            if (content.contains("[")) {
+                cleaned = content.substring(content.indexOf("["), content.lastIndexOf("]") + 1);
             }
-
-            Map<String, String> args = new HashMap<>();
-            JSONObject argsObject = step.optJSONObject("args");
-            if (argsObject != null) {
-                Iterator<String> keys = argsObject.keys();
-                while (keys.hasNext()) {
-                    String key = keys.next();
-                    args.put(key, String.valueOf(argsObject.opt(key)));
-                }
-            }
-
-            steps.add(new ActionSpec(
-                    toolName,
-                    args,
-                    riskFor(toolName),
-                    humanDescription(toolName, args)));
-        }
-
-        if (assistantMessage.isEmpty()) {
-            assistantMessage = steps.isEmpty()
-                    ? content
-                    : "Here's the plan:";
-        }
-
-        if (steps.isEmpty() && originalStepCount > 0 && assistantMessage.equals(content)) {
-            assistantMessage = "I can't perform that action in this app yet, but I can still chat about it.";
-        }
-
-        return new Plan(steps, assistantMessage);
-    }
-
-    private JSONObject parseStructuredContent(String content) throws JSONException {
-        String trimmed = content.trim();
-        if (trimmed.startsWith("```")) {
-            trimmed = trimmed
-                    .replaceFirst("^```(?:json)?\\s*", "")
-                    .replaceFirst("\\s*```$", "")
-                    .trim();
-        }
-
-        try {
-            return new JSONObject(trimmed);
-        } catch (JSONException objectError) {
+            stepsJson = new JSONArray(cleaned);
+        } catch (Exception e) {
+            // Fallback: Check if it's the old object format or just text
             try {
-                JSONArray array = new JSONArray(trimmed);
-                return new JSONObject().put("message", "Here's the plan:").put("steps", array);
-            } catch (JSONException arrayError) {
-                int firstObject = trimmed.indexOf('{');
-                int lastObject = trimmed.lastIndexOf('}');
-                if (firstObject >= 0 && lastObject > firstObject) {
-                    return new JSONObject(trimmed.substring(firstObject, lastObject + 1));
-                }
-
-                int firstArray = trimmed.indexOf('[');
-                int lastArray = trimmed.lastIndexOf(']');
-                if (firstArray >= 0 && lastArray > firstArray) {
-                    JSONArray array = new JSONArray(trimmed.substring(firstArray, lastArray + 1));
-                    return new JSONObject().put("message", "Here's the plan:").put("steps", array);
-                }
-
-                throw objectError;
+                JSONObject obj = new JSONObject(content);
+                assistantMessage = obj.optString("message", "Processing...");
+                stepsJson = obj.optJSONArray("steps");
+            } catch (Exception e2) {
+                Log.w(TAG, "Content is not JSON, returning as message");
+                return new Plan(Collections.emptyList(), content);
             }
         }
-    }
 
-    private RiskLevel riskFor(String toolName) {
-        Tool tool = registry.get(toolName);
-        return tool != null ? tool.defaultRiskLevel() : RiskLevel.LOW;
-    }
-
-    private String humanDescription(String toolName, Map<String, String> args) {
-        if (args.isEmpty()) {
-            return toolName + "()";
-        }
-
-        List<String> keys = new ArrayList<>(args.keySet());
-        Collections.sort(keys);
-        StringBuilder sb = new StringBuilder(toolName).append("(");
-        for (int i = 0; i < keys.size(); i++) {
-            if (i > 0) {
-                sb.append(", ");
-            }
-            String key = keys.get(i);
-            sb.append(key).append("=\"").append(args.get(key)).append("\"");
-        }
-        sb.append(")");
-        return sb.toString();
-    }
-
-    private String parseErrorMessage(String responseText, int statusCode) {
-        try {
-            JSONObject root = new JSONObject(responseText);
-            JSONObject error = root.optJSONObject("error");
-            if (error != null) {
-                String message = error.optString("message");
-                if (!message.isEmpty()) {
-                    return "MiniMax API error (" + statusCode + "): " + message;
+        List<ActionSpec> actions = new ArrayList<>();
+        if (stepsJson != null) {
+            for (int i = 0; i < stepsJson.length(); i++) {
+                JSONObject stepObj = stepsJson.getJSONObject(i);
+                String toolName = stepObj.optString("tool", "");
+                
+                if (registry.has(toolName)) {
+                    Map<String, String> argsMap = new HashMap<>();
+                    // Support both "parameters" (new) and "args" (old) keys
+                    JSONObject argsObj = stepObj.optJSONObject("parameters");
+                    if (argsObj == null) argsObj = stepObj.optJSONObject("args");
+                    
+                    if (argsObj != null) {
+                        Iterator<String> keys = argsObj.keys();
+                        while (keys.hasNext()) {
+                            String k = keys.next();
+                            argsMap.put(k, String.valueOf(argsObj.opt(k)));
+                        }
+                    }
+                    
+                    int stepNum = stepObj.optInt("step", i + 1);
+                    String label = stepObj.optString("label", toolName);
+                    
+                    actions.add(new ActionSpec(toolName, argsMap, RiskLevel.MEDIUM, label, stepNum, label));
                 }
             }
-        } catch (JSONException ignored) {
-            // Fall back to raw text below.
         }
 
-        return "MiniMax API error (" + statusCode + "): " + responseText;
+        return new Plan(actions, assistantMessage);
     }
 
-    private String readFully(InputStream inputStream) throws Exception {
-        if (inputStream == null) {
-            return "";
-        }
-
+    private String readFully(InputStream is) throws Exception {
+        if (is == null) return "";
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
+            while ((line = br.readLine()) != null) sb.append(line);
         }
         return sb.toString();
     }

@@ -1,6 +1,7 @@
 package edu.northeastern.agent_a.ui;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -34,6 +35,10 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
+import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.tasks.Task;
 import com.google.android.material.button.MaterialButton;
 
 import java.util.ArrayList;
@@ -49,14 +54,18 @@ import edu.northeastern.agent_a.core.agent.Planner;
 import edu.northeastern.agent_a.core.agent.Policy;
 import edu.northeastern.agent_a.core.memory.Message;
 import edu.northeastern.agent_a.core.memory.SessionStore;
+import edu.northeastern.agent_a.core.tools.ActionSpec;
 import edu.northeastern.agent_a.core.tools.ContactsLookupTool;
 import edu.northeastern.agent_a.core.tools.EarthPhotoTool;
 import edu.northeastern.agent_a.core.tools.EmailSummaryTool;
+import edu.northeastern.agent_a.core.tools.GmailComposeTool;
 import edu.northeastern.agent_a.core.tools.NewsFeedTool;
 import edu.northeastern.agent_a.core.tools.MapsNavigateTool;
 import edu.northeastern.agent_a.core.tools.PhoneDialTool;
 import edu.northeastern.agent_a.core.tools.Plan;
 import edu.northeastern.agent_a.core.tools.SmsComposeTool;
+import edu.northeastern.agent_a.core.tools.SpotifyControlTool;
+import edu.northeastern.agent_a.core.tools.SystemWaitTool;
 import edu.northeastern.agent_a.core.tools.ToolRegistry;
 import edu.northeastern.agent_a.core.tools.ToolResult;
 import edu.northeastern.agent_a.llm.GeminiLLMClient;
@@ -96,7 +105,7 @@ public class AgentChatActivity extends AppCompatActivity {
     private Policy policy;
     private ExecutorService planningExecutor;
     private ToolRegistry registry;
-    private String plannerModeLabel = "MiniMax";
+    private String plannerModeLabel = "Mock";
 
     private String pendingRetryText;
 
@@ -267,7 +276,7 @@ public class AgentChatActivity extends AppCompatActivity {
     }
 
     private void setupLlmSpinner() {
-        String[] llms = {"MiniMax", "Gemini", "Mock"};
+        String[] llms = {"Mock", "MiniMax", "Gemini"};
         ArrayAdapter<String> llmAdapter = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item, llms);
         llmAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -280,6 +289,10 @@ public class AgentChatActivity extends AppCompatActivity {
                 if (planner == null) return;
                 
                 switch (selected) {
+                    case "Mock":
+                        planner.setLlmClient(new MockLLMClient());
+                        plannerModeLabel = "Mock";
+                        break;
                     case "MiniMax":
                         planner.setLlmClient(new MiniMaxLLMClient(registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL));
                         plannerModeLabel = "MiniMax";
@@ -287,10 +300,6 @@ public class AgentChatActivity extends AppCompatActivity {
                     case "Gemini":
                         planner.setLlmClient(new GeminiLLMClient(BuildConfig.GEMINI_API_KEY));
                         plannerModeLabel = "Gemini";
-                        break;
-                    case "Mock":
-                        planner.setLlmClient(new MockLLMClient());
-                        plannerModeLabel = "Mock";
                         break;
                 }
                 setStatus("Planner: " + plannerModeLabel + " ready");
@@ -308,13 +317,16 @@ public class AgentChatActivity extends AppCompatActivity {
         registry.register(new MapsNavigateTool());
         registry.register(new ContactsLookupTool());
         registry.register(new EmailSummaryTool());
+        registry.register(new GmailComposeTool());
         registry.register(new NewsFeedTool());
         registry.register(new EarthPhotoTool());
+        registry.register(new SpotifyControlTool());
+        registry.register(new SystemWaitTool());
 
-        // Default to MiniMax using the hardcoded key
-        planner = new Planner(new MiniMaxLLMClient(registry, MINIMAX_KEY, MINIMAX_URL, MINIMAX_MODEL), registry);
-        plannerModeLabel = "MiniMax";
-        setStatus("Planner: MiniMax ready");
+        // Default to Mock
+        planner = new Planner(new MockLLMClient(), registry);
+        plannerModeLabel = "Mock";
+        setStatus("Planner: Mock ready");
 
         executor = new Executor(registry);
         policy = new Policy();
@@ -336,6 +348,21 @@ public class AgentChatActivity extends AppCompatActivity {
 
         planningExecutor.execute(() -> {
             try {
+                // Try Mock First as requested
+                if (!plannerModeLabel.equals("Mock")) {
+                    Log.i(TAG, "Attempting MockLLM first as requested...");
+                    Plan mockPlan = new Planner(new MockLLMClient(), registry).createPlan(text, sessionStore);
+                    if (mockPlan.hasActions()) {
+                        runOnUiThread(() -> {
+                            adapter.setLoading(false);
+                            presentPlan(mockPlan, text);
+                        });
+                        return;
+                    }
+                    Log.i(TAG, "MockLLM could not handle request, falling back to " + plannerModeLabel);
+                    runOnUiThread(() -> addAssistant("MockLLM could not handle this. Switching to " + plannerModeLabel + "..."));
+                }
+
                 Plan plan = planner.createPlan(text, sessionStore);
                 runOnUiThread(() -> {
                     adapter.setLoading(false);
@@ -367,8 +394,17 @@ public class AgentChatActivity extends AppCompatActivity {
             ActionPreviewHelper.show(this, plan, new ActionPreviewHelper.Callback() {
                 @Override
                 public void onConfirm() {
-                    addAssistant(plan.getAssistantMessage());
-                    executePlan(plan, originalUserText);
+                    Message assistantMsg = new Message(Message.Role.ASSISTANT, plan.getAssistantMessage());
+                    List<Message.SubTask> subTasks = new ArrayList<>();
+                    for (ActionSpec action : plan.getActions()) {
+                        subTasks.add(new Message.SubTask(action.getLabel()));
+                    }
+                    assistantMsg.setSubTasks(subTasks);
+                    sessionStore.addMessage(assistantMsg);
+                    adapter.notifyItemInserted(sessionStore.getMessages().size() - 1);
+                    rvMessages.scrollToPosition(adapter.getItemCount() - 1);
+                    
+                    executePlan(plan, originalUserText, assistantMsg);
                 }
 
                 @Override
@@ -379,54 +415,85 @@ public class AgentChatActivity extends AppCompatActivity {
                 }
             });
         } else {
-            addAssistant(plan.getAssistantMessage());
-            executePlan(plan, originalUserText);
+            Message assistantMsg = new Message(Message.Role.ASSISTANT, plan.getAssistantMessage());
+            List<Message.SubTask> subTasks = new ArrayList<>();
+            for (ActionSpec action : plan.getActions()) {
+                subTasks.add(new Message.SubTask(action.getLabel()));
+            }
+            assistantMsg.setSubTasks(subTasks);
+            sessionStore.addMessage(assistantMsg);
+            adapter.notifyItemInserted(sessionStore.getMessages().size() - 1);
+            
+            executePlan(plan, originalUserText, assistantMsg);
         }
     }
 
-    private void executePlan(Plan plan, String originalUserText) {
+    private void executePlan(Plan plan, String originalUserText, Message assistantMsg) {
         setStatus("Executing actions...");
         setInputEnabled(false);
 
         bgExecutor.execute(() -> {
-            List<ToolResult> results;
-            try {
-                results = executor.execute(this, plan);
-            } catch (Exception e) {
+            for (int i = 0; i < plan.getActions().size(); i++) {
+                final int index = i;
+                // Mark current running
                 runOnUiThread(() -> {
-                    addAssistant("Error: " + e.getMessage());
-                    setStatus(getString(R.string.status_ready));
-                    setInputEnabled(true);
+                    assistantMsg.updateSubTask(index, true, false, false);
+                    adapter.notifyItemChanged(sessionStore.getMessages().indexOf(assistantMsg));
                 });
-                return;
-            }
 
-            runOnUiThread(() -> {
-                for (int i = 0; i < results.size(); i++) {
-                    ToolResult r = results.get(i);
-                    String stepLabel = "Step " + (i + 1) + "/" + plan.getActions().size() + ": ";
+                ActionSpec action = plan.getActions().get(i);
+                ToolResult result = executor.executeSingleAction(this, action);
 
-                    switch (r.getStatus()) {
-                        case SUCCESS:
-                            addAssistant(stepLabel + r.displayText());
-                            break;
-                        case NEED_PERMISSION:
-                            addAssistant(stepLabel + r.displayText());
-                            pendingRetryText = originalUserText;
+                // Mark finished
+                runOnUiThread(() -> {
+                    if (result.getStatus() == ToolResult.Status.SUCCESS) {
+                        assistantMsg.updateSubTask(index, false, true, false);
+                        // Display the result content in the chat (e.g., email summary)
+                        addAssistant(result.displayText());
+                    } else if (result.getStatus() == ToolResult.Status.NEED_PERMISSION) {
+                        assistantMsg.updateSubTask(index, false, false, true); // Mark as waiting
+                        pendingRetryText = originalUserText;
+                        if ("Please sign in with your Google account to read emails.".equals(result.displayText())) {
+                            // OAuth handled via onActivityResult
+                        } else {
                             contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
-                            setStatus(getString(R.string.status_ready));
-                            setInputEnabled(true);
-                            return;
-                        case FAIL:
-                        default:
-                            addAssistant(stepLabel + "Failed — " + r.displayText());
-                            break;
+                        }
+                    } else {
+                        // Failed
+                        assistantMsg.updateSubTask(index, false, false, false);
+                        addAssistant("Error at step " + (index + 1) + ": " + result.displayText());
                     }
-                }
+                    adapter.notifyItemChanged(sessionStore.getMessages().indexOf(assistantMsg));
+                });
+
+                if (result.getStatus() != ToolResult.Status.SUCCESS) break;
+            }
+            
+            runOnUiThread(() -> {
                 setStatus(getString(R.string.status_ready));
                 setInputEnabled(true);
             });
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == EmailSummaryTool.RC_SIGN_IN) {
+            Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(data);
+            try {
+                task.getResult(ApiException.class);
+                if (pendingRetryText != null) {
+                    String retryText = pendingRetryText;
+                    pendingRetryText = null;
+                    addAssistant("Gmail signed in. Retrying...");
+                    handleUserInput(retryText);
+                }
+            } catch (ApiException e) {
+                Log.w(TAG, "signInResult:failed code=" + e.getStatusCode());
+                addAssistant("Gmail sign-in failed. Error code: " + e.getStatusCode());
+            }
+        }
     }
 
     private void setInputEnabled(boolean enabled) {

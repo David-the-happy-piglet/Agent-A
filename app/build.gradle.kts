@@ -74,10 +74,15 @@ dependencies {
     // Glide for image loading
     implementation("com.github.bumptech.glide:glide:4.16.0")
 
-    // Google Sign-In and Gmail API
+    // Google Auth
     implementation("com.google.android.gms:play-services-auth:21.3.0")
-    implementation("com.google.api-client:google-api-client-android:2.7.2")
-    implementation("com.google.apis:google-api-services-gmail:v1-rev20240905-2.0.0")
+    
+    // Google API Client & Gmail (Updated to aligned versions)
+    implementation("com.google.api-client:google-api-client-android:1.35.0")
+    implementation("com.google.apis:google-api-services-gmail:v1-rev20220404-2.0.0")
+    
+    // JSON & Network for Google APIs
+    implementation("com.google.http-client:google-http-client-gson:1.42.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

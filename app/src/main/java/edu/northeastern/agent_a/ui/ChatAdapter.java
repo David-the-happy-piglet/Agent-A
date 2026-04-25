@@ -4,6 +4,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -32,7 +34,6 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private static final SimpleDateFormat TIME_FMT =
             new SimpleDateFormat("HH:mm", Locale.getDefault());
 
-    // Pattern to detect URLs in message text
     private static final Pattern URL_PATTERN = Pattern.compile("(https?://\\S+\\.(?:png|jpg|jpeg|gif))", Pattern.CASE_INSENSITIVE);
 
     public ChatAdapter(List<Message> messages) {
@@ -78,14 +79,49 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             Message msg = messages.get(position);
             MessageViewHolder msgHolder = (MessageViewHolder) holder;
             
-            String text = msg.getText();
-            msgHolder.tvText.setText(text);
+            msgHolder.tvText.setText(msg.getText());
             msgHolder.tvTimestamp.setText(TIME_FMT.format(new Date(msg.getTimestamp())));
 
-            // Handle images in Assistant messages
             if (holder instanceof AssistantViewHolder) {
                 AssistantViewHolder assistantHolder = (AssistantViewHolder) holder;
-                Matcher matcher = URL_PATTERN.matcher(text);
+                
+                // Handle SubTasks
+                List<Message.SubTask> subTasks = msg.getSubTasks();
+                if (subTasks != null && !subTasks.isEmpty()) {
+                    assistantHolder.llSubTasks.setVisibility(View.VISIBLE);
+                    assistantHolder.llSubTasks.removeAllViews();
+                    LayoutInflater inflater = LayoutInflater.from(assistantHolder.itemView.getContext());
+                    
+                    for (Message.SubTask st : subTasks) {
+                        View stView = inflater.inflate(R.layout.item_subtask, assistantHolder.llSubTasks, false);
+                        TextView tvLabel = stView.findViewById(R.id.tvSubtaskLabel);
+                        ProgressBar pb = stView.findViewById(R.id.pbSubtask);
+                        ImageView iv = stView.findViewById(R.id.ivSubtaskStatus);
+                        
+                        tvLabel.setText(st.label);
+                        
+                        if (st.isRunning) {
+                            pb.setVisibility(View.VISIBLE);
+                            iv.setVisibility(View.GONE);
+                        } else if (st.isCompleted) {
+                            pb.setVisibility(View.GONE);
+                            iv.setVisibility(View.VISIBLE);
+                            iv.setImageResource(android.R.drawable.checkbox_on_background);
+                        } else {
+                            // Waiting
+                            pb.setVisibility(View.GONE);
+                            iv.setVisibility(View.VISIBLE);
+                            iv.setImageResource(android.R.drawable.checkbox_off_background);
+                        }
+                        
+                        assistantHolder.llSubTasks.addView(stView);
+                    }
+                } else {
+                    assistantHolder.llSubTasks.setVisibility(View.GONE);
+                }
+
+                // Handle images
+                Matcher matcher = URL_PATTERN.matcher(msg.getText());
                 if (matcher.find()) {
                     String imageUrl = matcher.group(1);
                     assistantHolder.ivContent.setVisibility(View.VISIBLE);
@@ -123,9 +159,11 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     static class AssistantViewHolder extends MessageViewHolder {
         final ImageView ivContent;
-        AssistantViewHolder(@NonNull View itemView) { 
+        final LinearLayout llSubTasks;
+         AssistantViewHolder(@NonNull View itemView) { 
             super(itemView);
             ivContent = itemView.findViewById(R.id.ivContentImage);
+            llSubTasks = itemView.findViewById(R.id.llSubTasks);
         }
     }
 
